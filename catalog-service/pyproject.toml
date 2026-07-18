@@ -91,3 +91,24 @@ forbidden_modules = [
     "faststream",
     "pydantic",
 ]
+
+[[tool.importlinter.contracts]]
+name = "application не знает фреймворков"
+type = "forbidden"
+source_modules = ["catalog_service.application"]
+forbidden_modules = [
+    "sqlalchemy",
+    "alembic",
+    "asyncpg",
+    "fastapi",
+    "faststream",
+    "pydantic",
+]
+
+[[tool.importlinter.contracts]]
+name = "слои направлены внутрь (application -> domain)"
+type = "layers"
+layers = [
+    "catalog_service.application",
+    "catalog_service.domain",
+]
