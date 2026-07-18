@@ -6,6 +6,17 @@ AGENTS.md
 CLAUDE.md
 .ruff_cache
 .claude
+# Python / uv артефакты
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.coverage.*
+.mypy_cache/
+*.egg-info/
+build/
+dist/
 postgres_data
 instructions.md
 products_catalog_ru.csv
