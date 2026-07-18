@@ -24,6 +24,8 @@ dev = [
     "pytest-randomly>=3.15",
     "ruff>=0.13",
     "import-linter>=2.1",
+    "testcontainers[postgresql]>=4.14.2",
+    "psycopg2-binary>=2.9.12",
 ]
 
 [build-system]
@@ -54,8 +56,10 @@ ignore = ["RUF001", "RUF002", "RUF003"]
 "pydantic".msg = "Pydantic — только presentation.schemas и infrastructure.config."
 
 [tool.ruff.lint.per-file-ignores]
-# Инфраструктуре можно ORM/драйверы/pydantic-settings (снимаем banned-api).
+# Инфраструктуре, миграциям и тестам можно ORM/драйверы (снимаем banned-api).
 "catalog_service/infrastructure/**" = ["TID251"]
+"alembic/**" = ["TID251"]
+"tests/**" = ["TID251"]
 
 # --- Тесты ---
 [tool.pytest.ini_options]
