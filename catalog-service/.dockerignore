@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.git/
+tests/
+.env
+.env.*
+!.env.example
+ARCHITECTURE.md
