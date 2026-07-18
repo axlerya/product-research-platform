@@ -8,6 +8,10 @@ from typing import Annotated
 
 from fastapi import Depends
 
+from catalog_service.application.ports.read_models import (
+    ProductQueryService,
+    ReferenceQueryService,
+)
 from catalog_service.application.use_cases.create_product import CreateProduct
 from catalog_service.application.use_cases.delete_product import DeleteProduct
 from catalog_service.application.use_cases.set_stock import SetStock
@@ -56,3 +60,19 @@ UpdateCommercialDep = Annotated[
 SetStockDep = Annotated[SetStock, Depends(get_set_stock_uc)]
 UpdateMetricsDep = Annotated[UpdateMetrics, Depends(get_update_metrics_uc)]
 DeleteProductDep = Annotated[DeleteProduct, Depends(get_delete_product_uc)]
+
+
+def get_product_query_service() -> ProductQueryService:
+    raise NotImplementedError(_UNWIRED)
+
+
+def get_reference_query_service() -> ReferenceQueryService:
+    raise NotImplementedError(_UNWIRED)
+
+
+ProductQueryDep = Annotated[
+    ProductQueryService, Depends(get_product_query_service)
+]
+ReferenceQueryDep = Annotated[
+    ReferenceQueryService, Depends(get_reference_query_service)
+]
