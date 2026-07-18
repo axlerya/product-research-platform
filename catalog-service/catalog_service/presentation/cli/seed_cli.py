@@ -14,6 +14,11 @@ from catalog_service.bootstrap import build_container
 app = typer.Typer(add_completion=False, help="catalog-service CLI")
 
 
+@app.callback()
+def _cli() -> None:
+    """catalog-service CLI (подкоманды ниже)."""
+
+
 @app.command()
 def seed(
     file: Annotated[
