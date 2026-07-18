@@ -152,27 +152,24 @@ async def test_search_out_of_stock(sm):
 
 
 async def test_margin_by_category(sm):
-    await _create(
-        sm,
-        sku="PROD-1",
-        category_name="Электроника",
-        price_amount=Decimal("100"),
-        cost_amount=Decimal("25"),
-    )
-    await _create(
-        sm,
-        sku="PROD-2",
-        category_name="Электроника",
-        price_amount=Decimal("100"),
-        cost_amount=Decimal("75"),
-    )
+    # Маржи 75.00, 25.00, 60.00 -> avg 53.3333... должно округлиться до 53.33.
+    for sku, cost in (("PROD-1", "25"), ("PROD-2", "75"), ("PROD-3", "40")):
+        await _create(
+            sm,
+            sku=sku,
+            category_name="Электроника",
+            price_amount=Decimal("100"),
+            cost_amount=Decimal(cost),
+        )
     rows = await SqlAlchemyProductQueryService(sm).margin_by_category(
         include_deleted=True
     )
     assert len(rows) == 1
     assert rows[0].category == "Электроника"
-    assert rows[0].product_count == 2
-    assert rows[0].avg_margin_percent == Decimal("50")
+    assert rows[0].product_count == 3
+    assert rows[0].avg_margin_percent == Decimal("53.33")
+    assert rows[0].min_margin_percent == Decimal("25.00")
+    assert rows[0].max_margin_percent == Decimal("75.00")
 
 
 async def test_list_references_with_counts(sm):

@@ -177,7 +177,7 @@ class SqlAlchemyProductQueryService:
         where = "" if include_deleted else " WHERE p.is_deleted = FALSE"
         sql = (
             "SELECT c.name AS category, count(*) AS cnt, "
-            "avg(p.margin_percent) AS avg_m, "
+            "round(avg(p.margin_percent), 2) AS avg_m, "
             "min(p.margin_percent) AS min_m, max(p.margin_percent) AS max_m "
             "FROM products p JOIN categories c ON c.id = p.category_id"
             f"{where} GROUP BY c.name ORDER BY c.name"
