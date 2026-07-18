@@ -1,0 +1,90 @@
+name: catalog-service
+
+x-app-env: &app-env
+  CATALOG_DATABASE_URL: postgresql+asyncpg://catalog:catalog@postgres:5432/catalog
+  CATALOG_RABBITMQ_DSN: amqp://guest:guest@rabbitmq:5672/
+  CATALOG_DEFAULT_CURRENCY: RUB
+
+x-build: &app-build
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: catalog
+      POSTGRES_PASSWORD: catalog
+      POSTGRES_DB: catalog
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U catalog -d catalog"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    <<: *app-build
+    environment: *app-env
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import urllib.request;
+          urllib.request.urlopen('http://localhost:8000/health')"
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  relay:
+    <<: *app-build
+    command:
+      - faststream
+      - run
+      - catalog_service.presentation.messaging.relay_app:app
+    environment: *app-env
+    depends_on:
+      api:
+        condition: service_healthy
+
+  seed:
+    <<: *app-build
+    profiles: ["seed"]
+    command:
+      - python
+      - -m
+      - catalog_service
+      - seed
+      - --file
+      - products_catalog_ru.csv
+    environment: *app-env
+    volumes:
+      - ../../products_catalog_ru.csv:/app/products_catalog_ru.csv:ro
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  pgdata:
