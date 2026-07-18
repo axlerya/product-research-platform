@@ -1,0 +1,11 @@
+.env*
+!.env.example
+skills-lock.json
+.agents
+AGENTS.md
+CLAUDE.md
+.ruff_cache
+.claude
+postgres_data
+instructions.md
+products_catalog_ru.csv
