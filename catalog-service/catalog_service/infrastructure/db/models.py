@@ -161,3 +161,10 @@ class OutboxORM(Base):
     attempts: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default="0"
     )
+    next_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
