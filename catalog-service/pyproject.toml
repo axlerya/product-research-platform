@@ -26,6 +26,7 @@ dev = [
     "import-linter>=2.1",
     "testcontainers[postgresql]>=4.14.2",
     "psycopg2-binary>=2.9.12",
+    "httpx2>=2.7.0",
 ]
 
 [build-system]
@@ -56,8 +57,9 @@ ignore = ["RUF001", "RUF002", "RUF003"]
 "pydantic".msg = "Pydantic — только presentation.schemas и infrastructure.config."
 
 [tool.ruff.lint.per-file-ignores]
-# Инфраструктуре, миграциям и тестам можно ORM/драйверы (снимаем banned-api).
+# Инфраструктуре, presentation, миграциям и тестам можно фреймворки/ORM.
 "catalog_service/infrastructure/**" = ["TID251"]
+"catalog_service/presentation/**" = ["TID251"]
 "alembic/**" = ["TID251"]
 "tests/**" = ["TID251"]
 
@@ -119,4 +121,14 @@ type = "layers"
 layers = [
     "catalog_service.application",
     "catalog_service.domain",
+]
+
+[[tool.importlinter.contracts]]
+name = "presentation не импортирует infrastructure"
+type = "forbidden"
+source_modules = ["catalog_service.presentation"]
+forbidden_modules = [
+    "catalog_service.infrastructure",
+    "sqlalchemy",
+    "asyncpg",
 ]
