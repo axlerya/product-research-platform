@@ -53,6 +53,10 @@ ignore = ["RUF001", "RUF002", "RUF003"]
 "faststream".msg = "Брокер — только infrastructure/presentation.messaging."
 "pydantic".msg = "Pydantic — только presentation.schemas и infrastructure.config."
 
+[tool.ruff.lint.per-file-ignores]
+# Инфраструктуре можно ORM/драйверы/pydantic-settings (снимаем banned-api).
+"catalog_service/infrastructure/**" = ["TID251"]
+
 # --- Тесты ---
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
