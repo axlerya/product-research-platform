@@ -13,11 +13,13 @@ from uuid import UUID
 from sqlalchemy import (
     CHAR,
     CheckConstraint,
+    DateTime,
     ForeignKey,
     Integer,
     Numeric,
     String,
     Text,
+    func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
@@ -38,7 +40,7 @@ class CategoryORM(Base):
 
     id: Mapped[uuid_pk]
     name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
-    created_at: Mapped[ts_tz] = mapped_column()
+    created_at: Mapped[ts_tz] = mapped_column(server_default=func.now())
 
 
 class BrandORM(Base):
@@ -48,7 +50,7 @@ class BrandORM(Base):
 
     id: Mapped[uuid_pk]
     name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
-    created_at: Mapped[ts_tz] = mapped_column()
+    created_at: Mapped[ts_tz] = mapped_column(server_default=func.now())
 
 
 class SupplierORM(Base):
@@ -58,7 +60,7 @@ class SupplierORM(Base):
 
     id: Mapped[uuid_pk]
     name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
-    created_at: Mapped[ts_tz] = mapped_column()
+    created_at: Mapped[ts_tz] = mapped_column(server_default=func.now())
 
 
 class ProductORM(Base):
@@ -106,9 +108,11 @@ class ProductORM(Base):
     is_deleted: Mapped[bool] = mapped_column(
         nullable=False, server_default="false"
     )
-    created_at: Mapped[ts_tz] = mapped_column()
+    created_at: Mapped[ts_tz] = mapped_column(server_default=func.now())
     updated_at: Mapped[ts_tz] = mapped_column()
-    deleted_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # Гидрация имён справочников (Data Mapper); eager-load через selectinload.
     category: Mapped[CategoryORM] = relationship(lazy="raise")
@@ -150,8 +154,10 @@ class OutboxORM(Base):
         JSONB, nullable=False, server_default="{}"
     )
     occurred_at: Mapped[ts_tz] = mapped_column()
-    created_at: Mapped[ts_tz] = mapped_column()
-    published_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    created_at: Mapped[ts_tz] = mapped_column(server_default=func.now())
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     attempts: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default="0"
     )
