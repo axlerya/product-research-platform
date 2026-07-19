@@ -927,6 +927,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "qdrant-client" },
+    { name = "typer" },
 ]
 
 [package.optional-dependencies]
@@ -953,6 +954,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pydantic-settings", specifier = ">=2.3" },
     { name = "qdrant-client", specifier = ">=1.12" },
+    { name = "typer", specifier = ">=0.12" },
 ]
 provides-extras = ["embedding"]
 
