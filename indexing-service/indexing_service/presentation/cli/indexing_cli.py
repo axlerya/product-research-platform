@@ -32,6 +32,12 @@ def reindex(
     asyncio.run(_reindex(target))
 
 
+@app.command(name="replay-dlq")
+def replay_dlq() -> None:
+    """Переотправить запаркованные (DLQ) сообщения в основной exchange."""
+    asyncio.run(_replay_dlq())
+
+
 async def _provision() -> None:
     deps = await build_batch(get_settings())
     try:
@@ -59,3 +65,14 @@ async def _reindex(target: str) -> None:
         typer.echo(str(report))
     finally:
         await deps.aclose()
+
+
+async def _replay_dlq() -> None:
+    from faststream.rabbit import RabbitBroker
+
+    from indexing_service.presentation.messaging.dlq import replay_parked
+
+    broker = RabbitBroker(get_settings().rabbitmq_dsn)
+    async with broker:
+        count = await replay_parked(broker)
+    typer.echo(f"переотправлено: {count}")

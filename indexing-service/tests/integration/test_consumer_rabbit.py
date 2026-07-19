@@ -1,11 +1,13 @@
 """Integration: доставка и топология консюмера против реального RabbitMQ."""
 
+import asyncio
 from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
 from faststream.rabbit import RabbitBroker, TestRabbitBroker
 
+from indexing_service.presentation.messaging.dlq import replay_parked
 from indexing_service.presentation.messaging.schemas import CatalogEnvelope
 from indexing_service.presentation.messaging.topology import (
     CATALOG_EXCHANGE,
@@ -55,6 +57,33 @@ async def test_real_delivery_and_retry_topology(rabbitmq_url):
             exchange=CATALOG_EXCHANGE,
             routing_key="catalog.product.deleted",
         )
+        await handler.wait_call(timeout=5)
+
+    assert received == ["catalog.product.deleted"]
+
+
+async def test_replay_dlq_reprocesses_parked_message(rabbitmq_url):
+    received: list[str] = []
+    broker = RabbitBroker(rabbitmq_url)
+
+    @broker.subscriber(main_queue(), CATALOG_EXCHANGE)
+    async def handler(envelope: CatalogEnvelope) -> None:
+        received.append(envelope.event_type)
+
+    async with TestRabbitBroker(broker, with_real=True):
+        parking_ex = await broker.declare_exchange(PARKING_EXCHANGE)
+        parking_q = await broker.declare_queue(parking_queue())
+        await parking_q.bind(parking_ex, routing_key="catalog.product.*")
+
+        # Паркуем сообщение, затем реплеим — оно должно вернуться в main.
+        await broker.publish(
+            _ENVELOPE,
+            exchange=PARKING_EXCHANGE,
+            routing_key="catalog.product.deleted",
+        )
+        await asyncio.sleep(0.5)
+        replayed = await replay_parked(broker)
+        assert replayed == 1
         await handler.wait_call(timeout=5)
 
     assert received == ["catalog.product.deleted"]

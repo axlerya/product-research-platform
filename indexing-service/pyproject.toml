@@ -105,6 +105,7 @@ omit = [
     "indexing_service/main.py",
     "indexing_service/bootstrap.py",
     "indexing_service/presentation/messaging/consumer_app.py",
+    "indexing_service/presentation/messaging/dlq.py",
     "indexing_service/presentation/cli/*",
     "indexing_service/presentation/api/app.py",
 ]
