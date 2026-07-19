@@ -12,6 +12,12 @@ from qdrant_client import AsyncQdrantClient
 from indexing_service.application.use_cases.process_catalog_event import (
     ProcessCatalogEvent,
 )
+from indexing_service.application.use_cases.reconcile_catalog import (
+    ReconcileCatalog,
+)
+from indexing_service.application.use_cases.reindex_catalog import (
+    ReindexCatalog,
+)
 from indexing_service.infrastructure.catalog.http_client import (
     HttpCatalogClient,
 )
@@ -22,6 +28,7 @@ from indexing_service.infrastructure.embedding.deterministic import (
 from indexing_service.infrastructure.qdrant.collection_provisioner import (
     CollectionProvisioner,
 )
+from indexing_service.infrastructure.qdrant.index_admin import QdrantIndexAdmin
 from indexing_service.infrastructure.qdrant.vector_index import (
     QdrantVectorIndex,
 )
@@ -78,3 +85,53 @@ async def build_consumer(settings: Settings) -> ConsumerDeps:
         clock=SystemClock(),
     )
     return ConsumerDeps(use_case=use_case, qdrant=qdrant, http=http)
+
+
+@dataclass
+class BatchDeps:
+    """Зависимости batch-операций (reindex/reconcile/provision)."""
+
+    reindex: ReindexCatalog
+    reconcile: ReconcileCatalog
+    provisioner: CollectionProvisioner
+    alias: str
+    qdrant: AsyncQdrantClient
+    http: httpx.AsyncClient
+
+    async def aclose(self) -> None:
+        await self.qdrant.close()
+        await self.http.aclose()
+
+
+async def build_batch(settings: Settings) -> BatchDeps:
+    """Собирает use cases reindex/reconcile и провижинер коллекции."""
+    qdrant = AsyncQdrantClient(
+        url=settings.qdrant_url, api_key=settings.qdrant_api_key or None
+    )
+    http = httpx.AsyncClient(timeout=30.0)
+    embedder = _build_embedder(settings)
+    catalog = HttpCatalogClient(http, base_url=settings.catalog_base_url)
+    clock = SystemClock()
+    physical = f"{settings.collection_alias}_v1"
+    return BatchDeps(
+        reindex=ReindexCatalog(
+            admin=QdrantIndexAdmin(qdrant, dim=settings.embedding_dim),
+            embedder=embedder,
+            catalog=catalog,
+            clock=clock,
+        ),
+        reconcile=ReconcileCatalog(
+            index=QdrantVectorIndex(
+                qdrant, collection=settings.collection_alias
+            ),
+            embedder=embedder,
+            catalog=catalog,
+            clock=clock,
+        ),
+        provisioner=CollectionProvisioner(
+            qdrant, collection=physical, dim=settings.embedding_dim
+        ),
+        alias=settings.collection_alias,
+        qdrant=qdrant,
+        http=http,
+    )
