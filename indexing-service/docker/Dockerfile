@@ -23,5 +23,6 @@ RUN chmod +x /entrypoint.sh
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1
 USER app
+EXPOSE 8000
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["faststream", "run", "indexing_service.presentation.messaging.consumer_app:app", "--workers", "1"]
+CMD ["uvicorn", "indexing_service.presentation.messaging.consumer_app:app", "--host", "0.0.0.0", "--port", "8000"]

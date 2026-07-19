@@ -39,9 +39,20 @@ services:
   consumer:
     <<: *app-build
     environment: *app-env
+    ports:
+      - "8000:8000"
     depends_on:
       rabbitmq:
         condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import urllib.request;
+          urllib.request.urlopen('http://localhost:8000/health')"
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
   reindex:
     <<: *app-build
