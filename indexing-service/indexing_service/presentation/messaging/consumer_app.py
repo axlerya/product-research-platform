@@ -1,13 +1,17 @@
-"""FastStream consumer-app: подписка catalog.events + retry/DLQ (§3, §7).
+"""FastStream consumer-app: catalog.events + retry/DLQ + ops (§3, §7, §10).
 
-Запуск: ``faststream run
-indexing_service.presentation.messaging.consumer_app:app``.
+Один процесс: потребляет события И отдаёт ``/health`` (пинг брокера) и
+``/metrics`` (Prometheus). Запуск:
+``uvicorn indexing_service.presentation.messaging.consumer_app:app``.
 """
 
 from typing import Any
 
-from faststream import AckPolicy, Context, ContextRepo, FastStream
+from faststream import AckPolicy, Context, ContextRepo
+from faststream.asgi import AsgiFastStream, make_ping_asgi
 from faststream.rabbit import RabbitBroker, RabbitMessage
+from faststream.rabbit.prometheus import RabbitPrometheusMiddleware
+from prometheus_client import CollectorRegistry, make_asgi_app
 
 from indexing_service.bootstrap import build_consumer
 from indexing_service.infrastructure.config import get_settings
@@ -24,8 +28,19 @@ from indexing_service.presentation.messaging.topology import (
 )
 
 _settings = get_settings()
-broker = RabbitBroker(_settings.rabbitmq_dsn, graceful_timeout=30)
-app = FastStream(broker)
+_registry = CollectorRegistry()
+broker = RabbitBroker(
+    _settings.rabbitmq_dsn,
+    graceful_timeout=30,
+    middlewares=[RabbitPrometheusMiddleware(registry=_registry)],
+)
+app = AsgiFastStream(
+    broker,
+    asgi_routes=[
+        ("/health", make_ping_asgi(broker, timeout=5.0)),
+        ("/metrics", make_asgi_app(_registry)),
+    ],
+)
 _MAIN = main_queue()
 
 
