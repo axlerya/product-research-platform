@@ -1,0 +1,29 @@
+{
+  "event_id": "0192f0c8-7b3a-7e2d-9a1c-1f2e3d4c5b6a",
+  "event_type": "catalog.product.created",
+  "event_version": "1.0",
+  "aggregate_type": "product",
+  "aggregate_id": "0192f0c8-0000-7000-8000-000000000001",
+  "sku": "PROD-001",
+  "aggregate_version": 1,
+  "occurred_at": "2026-07-18T10:15:30.123456Z",
+  "producer": "catalog-service",
+  "data": {
+    "product_id": "0192f0c8-0000-7000-8000-000000000001",
+    "sku": "PROD-001",
+    "name": "Беспроводные Bluetooth-наушники Pro",
+    "description": "Премиальные полноразмерные наушники",
+    "category": "Электроника",
+    "brand": "AudioMax",
+    "supplier": "TechSupply Co",
+    "price": { "amount": "129.99", "currency": "RUB" },
+    "cost": { "amount": "65.00", "currency": "RUB" },
+    "stock": 245,
+    "metrics": {
+      "sales_per_month": 87,
+      "avg_rating": "4.50",
+      "review_count": 1243
+    },
+    "source_updated_at": "2024-03-15"
+  }
+}

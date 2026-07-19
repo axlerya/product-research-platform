@@ -1,0 +1,15 @@
+{
+  "event_id": "0192f0c8-7b3a-7e2d-9a1c-1f2e3d4c5b6d",
+  "event_type": "catalog.product.deleted",
+  "event_version": "1.0",
+  "aggregate_type": "product",
+  "aggregate_id": "0192f0c8-0000-7000-8000-000000000001",
+  "sku": "PROD-001",
+  "aggregate_version": 7,
+  "occurred_at": "2026-07-18T10:17:00Z",
+  "producer": "catalog-service",
+  "data": {
+    "product_id": "0192f0c8-0000-7000-8000-000000000001",
+    "sku": "PROD-001"
+  }
+}
