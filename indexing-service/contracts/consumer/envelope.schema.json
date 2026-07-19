@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "catalog.events envelope — consumer view (tolerant reader)",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "event_id",
+    "event_type",
+    "aggregate_id",
+    "sku",
+    "aggregate_version",
+    "occurred_at",
+    "data"
+  ],
+  "properties": {
+    "event_id": { "type": "string", "format": "uuid" },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "catalog.product.created",
+        "catalog.product.content_changed",
+        "catalog.product.commercial_data_changed",
+        "catalog.product.deleted"
+      ]
+    },
+    "event_version": { "type": "string" },
+    "aggregate_id": { "type": "string", "format": "uuid" },
+    "sku": { "type": "string" },
+    "aggregate_version": { "type": "integer", "minimum": 1 },
+    "occurred_at": { "type": "string" },
+    "producer": { "type": "string" },
+    "data": { "type": "object" }
+  }
+}

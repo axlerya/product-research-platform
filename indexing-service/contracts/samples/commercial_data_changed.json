@@ -1,0 +1,20 @@
+{
+  "event_id": "0192f0c8-7b3a-7e2d-9a1c-1f2e3d4c5b6c",
+  "event_type": "catalog.product.commercial_data_changed",
+  "event_version": "1.0",
+  "aggregate_type": "product",
+  "aggregate_id": "0192f0c8-0000-7000-8000-000000000001",
+  "sku": "PROD-001",
+  "aggregate_version": 6,
+  "occurred_at": "2026-07-18T10:16:00Z",
+  "producer": "catalog-service",
+  "data": {
+    "product_id": "0192f0c8-0000-7000-8000-000000000001",
+    "sku": "PROD-001",
+    "changed_fields": ["price", "stock"],
+    "price": { "amount": "119.99", "currency": "RUB" },
+    "cost": { "amount": "65.00", "currency": "RUB" },
+    "stock": 230,
+    "supplier": "TechSupply Co"
+  }
+}
