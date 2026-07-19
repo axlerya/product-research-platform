@@ -4,7 +4,8 @@
 (временная ошибка → ретрай, §7.1).
 """
 
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
+from uuid import UUID
 
 import httpx
 from qdrant_client import AsyncQdrantClient, models
@@ -13,7 +14,7 @@ from qdrant_client.http.exceptions import (
     UnexpectedResponse,
 )
 
-from indexing_service.application.dto.point import PointRecord
+from indexing_service.application.dto.point import PointRecord, WatermarkEntry
 from indexing_service.application.exceptions import VectorIndexError
 from indexing_service.domain.value_objects.embedding import Embedding
 from indexing_service.domain.value_objects.identifiers import ProductId
@@ -56,6 +57,31 @@ class QdrantVectorIndex:
         if not records:
             return None
         return watermark_from_payload(records[0].payload)
+
+    async def scroll_watermarks(self) -> AsyncIterator[WatermarkEntry]:
+        offset = None
+        while True:
+            records, offset = await self._guard(
+                self._client.scroll(
+                    collection_name=self._collection,
+                    limit=256,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+            )
+            for record in records:
+                watermark = watermark_from_payload(record.payload)
+                if watermark is None:
+                    continue
+                payload = record.payload or {}
+                yield WatermarkEntry(
+                    product_id=ProductId(UUID(str(record.id))),
+                    watermark=watermark,
+                    is_deleted=bool(payload.get("is_deleted", False)),
+                )
+            if offset is None:
+                break
 
     async def upsert_document(self, point: PointRecord) -> None:
         await self._guard(

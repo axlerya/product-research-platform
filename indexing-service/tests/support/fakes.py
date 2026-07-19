@@ -8,7 +8,7 @@
 import hashlib
 from datetime import UTC, datetime
 
-from indexing_service.application.dto.point import PointRecord
+from indexing_service.application.dto.point import PointRecord, WatermarkEntry
 from indexing_service.domain.value_objects.content_hash import ContentHash
 from indexing_service.domain.value_objects.dense_vector import DenseVector
 from indexing_service.domain.value_objects.embedding import Embedding
@@ -55,6 +55,17 @@ class FakeVectorIndex:
     ) -> IndexingWatermark | None:
         entry = self._points.get(product_id)
         return _watermark(entry["payload"]) if entry else None
+
+    async def scroll_watermarks(self):
+        for product_id, entry in self._points.items():
+            payload = entry["payload"]
+            if "aggregate_version" not in payload:
+                continue
+            yield WatermarkEntry(
+                product_id=product_id,
+                watermark=_watermark(payload),
+                is_deleted=bool(payload.get("is_deleted", False)),
+            )
 
     async def upsert_document(self, point: PointRecord) -> None:
         self._points[point.product_id] = {
