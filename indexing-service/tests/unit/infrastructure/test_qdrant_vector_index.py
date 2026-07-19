@@ -108,3 +108,36 @@ async def test_transient_error_translated():
     point = PointRecord(product_id=PID, embedding=_embedding(), payload={})
     with pytest.raises(VectorIndexError):
         await _index(Boom()).upsert_document(point)
+
+
+async def test_scroll_watermarks_paginates():
+    def _record(seq: int, deleted: bool):
+        return SimpleNamespace(
+            id=str(UUID(int=seq)),
+            payload={
+                "aggregate_version": seq,
+                "model_version": "m",
+                "indexed_at": "2026-07-19T00:00:00+00:00",
+                "content_hash": None,
+                "is_deleted": deleted,
+            },
+        )
+
+    class ScrollClient(FakeClient):
+        def __init__(self):
+            super().__init__()
+            self._pages = [
+                ([_record(1, False)], "cursor"),
+                ([_record(2, True)], None),
+            ]
+            self._page = 0
+
+        async def scroll(self, **kw):
+            page = self._pages[self._page]
+            self._page += 1
+            return page
+
+    entries = [e async for e in _index(ScrollClient()).scroll_watermarks()]
+    assert len(entries) == 2
+    assert entries[0].watermark.aggregate_version == 1
+    assert entries[1].is_deleted is True

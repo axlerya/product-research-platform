@@ -5,7 +5,6 @@
 ``EventValidationError`` (→ DLQ); временные ошибки портов пробрасывает.
 """
 
-from indexing_service.application.document_builder import to_product_document
 from indexing_service.application.dto.events import (
     CatalogEvent,
     CommercialChangedEvent,
@@ -13,17 +12,15 @@ from indexing_service.application.dto.events import (
     ProductCreatedEvent,
     ProductDeletedEvent,
 )
-from indexing_service.application.dto.point import PointRecord
 from indexing_service.application.dto.snapshot import ProductSnapshot
 from indexing_service.application.exceptions import (
     EventValidationError,
     ProductNotInCatalog,
 )
+from indexing_service.application.indexer import index_snapshot, tombstone
 from indexing_service.application.payload import (
     commercial_payload,
     content_payload,
-    full_payload,
-    tombstone_fields,
 )
 from indexing_service.application.ports.catalog_gateway import CatalogGateway
 from indexing_service.application.ports.clock import Clock
@@ -119,22 +116,11 @@ class ProcessCatalogEvent:
 
     async def _full_index(self, snapshot: ProductSnapshot) -> None:
         """Полная индексация: документ → эмбеддинг → upsert."""
-        now = self._clock.now()
-        document = to_product_document(snapshot)
-        [embedding] = await self._embedder.embed_documents(
-            [document.search_text()]
-        )
-        payload = full_payload(
-            document,
-            model_version=embedding.model_id.key,
-            indexed_at=now,
-        )
-        await self._index.upsert_document(
-            PointRecord(
-                product_id=document.product_id,
-                embedding=embedding,
-                payload=payload,
-            )
+        await index_snapshot(
+            snapshot,
+            index=self._index,
+            embedder=self._embedder,
+            clock=self._clock,
         )
 
     async def _repair(self, product_id: ProductId) -> None:
@@ -210,12 +196,11 @@ class ProcessCatalogEvent:
         self, event: ProductDeletedEvent, product_id: ProductId
     ) -> None:
         """Помечает точку удалённой, сохраняя версию (§6.5)."""
-        await self._index.set_payload(
+        await tombstone(
             product_id,
-            tombstone_fields(
-                aggregate_version=event.aggregate_version,
-                deleted_at=self._clock.now(),
-            ),
+            index=self._index,
+            clock=self._clock,
+            version=event.aggregate_version,
         )
 
     @staticmethod
