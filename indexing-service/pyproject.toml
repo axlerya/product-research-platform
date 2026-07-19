@@ -8,6 +8,7 @@ dependencies = [
     "pydantic-settings>=2.3",
     "qdrant-client>=1.12",
     "httpx>=0.27",
+    "faststream[rabbit]>=0.6",
 ]
 
 [project.optional-dependencies]
@@ -88,7 +89,7 @@ omit = [
     "indexing_service/__main__.py",
     "indexing_service/main.py",
     "indexing_service/bootstrap.py",
-    "indexing_service/presentation/messaging/*",
+    "indexing_service/presentation/messaging/consumer_app.py",
     "indexing_service/presentation/cli/*",
     "indexing_service/presentation/api/app.py",
 ]
