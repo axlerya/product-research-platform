@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     max_attempts: int = 5
     retry_ttl_ms: int = 30000
     log_level: str = "INFO"
+    # Наблюдаемость: OTLP-endpoint трейсинга (пусто = трейсинг выключен).
+    otlp_endpoint: str | None = None
+    service_name: str = "indexing-service"
 
 
 def get_settings() -> Settings:
