@@ -29,10 +29,26 @@ from indexing_service.presentation.messaging.topology import (
 
 _settings = get_settings()
 _registry = CollectorRegistry()
+_middlewares: list = [RabbitPrometheusMiddleware(registry=_registry)]
+if _settings.otlp_endpoint:
+    from faststream.rabbit.opentelemetry import RabbitTelemetryMiddleware
+
+    from indexing_service.infrastructure.observability.tracing import (
+        build_tracer_provider,
+    )
+
+    _middlewares.append(
+        RabbitTelemetryMiddleware(
+            tracer_provider=build_tracer_provider(
+                service_name=_settings.service_name,
+                endpoint=_settings.otlp_endpoint,
+            )
+        )
+    )
 broker = RabbitBroker(
     _settings.rabbitmq_dsn,
     graceful_timeout=30,
-    middlewares=[RabbitPrometheusMiddleware(registry=_registry)],
+    middlewares=_middlewares,
 )
 app = AsgiFastStream(
     broker,
