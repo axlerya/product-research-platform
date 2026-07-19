@@ -50,6 +50,17 @@ select = ["E", "F", "I", "UP", "B", "TID", "ASYNC", "RUF"]
 # докстринги и комментарии на русском намеренно.
 ignore = ["RUF001", "RUF002", "RUF003"]
 
+[tool.ruff.lint.flake8-bugbear]
+# DI-идиома FastStream/FastAPI: вызов Context/Depends в дефолтах аргументов
+# обязателен фреймворком — это не мутабельный дефолт (B008).
+extend-immutable-calls = [
+    "faststream.Context",
+    "faststream.Depends",
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Path",
+]
+
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "qdrant_client".msg = "Векторное хранилище — только infrastructure."
 "faststream".msg = "Брокер — только infrastructure/presentation.messaging."
