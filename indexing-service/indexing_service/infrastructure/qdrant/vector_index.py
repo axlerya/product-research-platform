@@ -1,0 +1,99 @@
+"""Адаптер ``QdrantVectorIndex`` — реализация порта ``VectorIndex``.
+
+Инфраструктурные сбои Qdrant/сети переводит в ``VectorIndexError``
+(временная ошибка → ретрай, §7.1).
+"""
+
+from collections.abc import Mapping
+
+import httpx
+from qdrant_client import AsyncQdrantClient, models
+from qdrant_client.http.exceptions import (
+    ResponseHandlingException,
+    UnexpectedResponse,
+)
+
+from indexing_service.application.dto.point import PointRecord
+from indexing_service.application.exceptions import VectorIndexError
+from indexing_service.domain.value_objects.embedding import Embedding
+from indexing_service.domain.value_objects.identifiers import ProductId
+from indexing_service.domain.value_objects.watermark import IndexingWatermark
+from indexing_service.infrastructure.qdrant.mappers import (
+    point_id,
+    to_named_vectors,
+    to_point_struct,
+    watermark_from_payload,
+)
+
+_QDRANT_ERRORS = (
+    UnexpectedResponse,
+    ResponseHandlingException,
+    httpx.HTTPError,
+    OSError,
+)
+
+
+class QdrantVectorIndex:
+    """Пишет/читает точки в коллекцию (обычно через alias)."""
+
+    def __init__(
+        self, client: AsyncQdrantClient, *, collection: str
+    ) -> None:
+        self._client = client
+        self._collection = collection
+
+    async def get_watermark(
+        self, product_id: ProductId
+    ) -> IndexingWatermark | None:
+        records = await self._guard(
+            self._client.retrieve(
+                collection_name=self._collection,
+                ids=[point_id(product_id)],
+                with_payload=True,
+                with_vectors=False,
+            )
+        )
+        if not records:
+            return None
+        return watermark_from_payload(records[0].payload)
+
+    async def upsert_document(self, point: PointRecord) -> None:
+        await self._guard(
+            self._client.upsert(
+                collection_name=self._collection,
+                points=[to_point_struct(point)],
+            )
+        )
+
+    async def update_vectors(
+        self, product_id: ProductId, embedding: Embedding
+    ) -> None:
+        await self._guard(
+            self._client.update_vectors(
+                collection_name=self._collection,
+                points=[
+                    models.PointVectors(
+                        id=point_id(product_id),
+                        vector=to_named_vectors(embedding),
+                    )
+                ],
+            )
+        )
+
+    async def set_payload(
+        self, product_id: ProductId, fields: Mapping[str, object]
+    ) -> None:
+        await self._guard(
+            self._client.set_payload(
+                collection_name=self._collection,
+                payload=dict(fields),
+                points=[point_id(product_id)],
+            )
+        )
+
+    @staticmethod
+    async def _guard(awaitable):
+        try:
+            return await awaitable
+        except _QDRANT_ERRORS as exc:
+            raise VectorIndexError(str(exc)) from exc
