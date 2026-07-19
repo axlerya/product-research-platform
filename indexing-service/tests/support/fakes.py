@@ -95,6 +95,24 @@ class FakeVectorIndex:
         return product_id in self._points
 
 
+class FakeVectorIndexAdmin:
+    """In-memory ``VectorIndexAdmin`` — общий ``FakeVectorIndex`` writer."""
+
+    def __init__(self) -> None:
+        self.index = FakeVectorIndex()
+        self.provisioned: list[str] = []
+        self.swaps: list[tuple[str, str]] = []
+
+    async def provision(self, collection: str) -> None:
+        self.provisioned.append(collection)
+
+    async def swap_alias(self, alias: str, to_collection: str) -> None:
+        self.swaps.append((alias, to_collection))
+
+    def writer(self, collection: str) -> FakeVectorIndex:
+        return self.index
+
+
 class FakeEmbeddingModel:
     """Детерминированный фейк ``EmbeddingModel`` (dim=4, без загрузки)."""
 
