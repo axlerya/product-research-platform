@@ -39,3 +39,19 @@ class NegativeMetricError(DomainError):
 
 class CurrencyMismatchError(DomainError):
     """Операция над деньгами в разных валютах."""
+
+
+class InvalidDocumentError(DomainError):
+    """Пустой или некорректный текст поискового документа."""
+
+
+class InvalidVectorError(DomainError):
+    """Некорректный dense/sparse вектор (форма/значения/размерность)."""
+
+
+class InvalidModelIdError(DomainError):
+    """Некорректный идентификатор модели эмбеддингов."""
+
+
+class InvalidWatermarkError(DomainError):
+    """Некорректный водяной знак индексации (версия < 1)."""
