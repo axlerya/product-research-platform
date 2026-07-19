@@ -1,0 +1,69 @@
+name: indexing-service
+
+# FAKE-режим: конвейер работает без загрузки BGE-M3 (для smoke/CI). Для
+# продакшена соберите образ с extra "embedding", задайте
+# INDEXING_EMBEDDING_MODE=local и INDEXING_EMBEDDING_DIM=1024.
+x-app-env: &app-env
+  INDEXING_RABBITMQ_DSN: amqp://guest:guest@rabbitmq:5672/
+  INDEXING_QDRANT_URL: http://qdrant:6333
+  INDEXING_CATALOG_BASE_URL: http://host.docker.internal:8000
+  INDEXING_DEFAULT_CURRENCY: RUB
+  INDEXING_EMBEDDING_MODE: fake
+  INDEXING_EMBEDDING_DIM: "8"
+
+x-build: &app-build
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  consumer:
+    <<: *app-build
+    environment: *app-env
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  reindex:
+    <<: *app-build
+    profiles: ["reindex"]
+    environment: *app-env
+    command:
+      - python
+      - -m
+      - indexing_service
+      - reindex
+      - --target
+      - products_bge_m3_v2
+
+  reconcile:
+    <<: *app-build
+    profiles: ["reconcile"]
+    environment: *app-env
+    command:
+      - python
+      - -m
+      - indexing_service
+      - reconcile
+
+volumes:
+  qdrant_data:
