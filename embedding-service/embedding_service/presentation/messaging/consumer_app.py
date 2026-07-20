@@ -40,8 +40,16 @@ def build_broker(deps: Deps) -> RabbitBroker:
     )
 
 
-def build_consumer(deps: Deps, is_ready: Callable[[], bool]) -> AsgiFastStream:
-    """Собирает AsgiFastStream: subscriber команд + ops-маршруты."""
+def build_consumer(
+    deps: Deps,
+    is_ready: Callable[[], bool],
+    reranker_ready: Callable[[], bool] | None = None,
+) -> AsgiFastStream:
+    """Собирает AsgiFastStream: subscriber команд + ops-маршруты.
+
+    ``reranker_ready`` (при включённом reranker) добавляет отдельный пробник
+    ``/reranker/ready`` — readiness reranker независим от embeddings ``/ready``.
+    """
     broker = build_broker(deps)
     # mandatory=True — брокер вернёт несматченное сообщение (basic.return).
     generated = broker.publisher(
@@ -85,11 +93,12 @@ def build_consumer(deps: Deps, is_ready: Callable[[], bool]) -> AsgiFastStream:
             max_attempts=deps.settings.max_attempts,
         )
 
-    return AsgiFastStream(
-        broker,
-        asgi_routes=[
-            ("/health", make_ping_asgi(broker, timeout=5.0)),
-            ("/ready", readiness_asgi(is_ready)),
-            ("/metrics", make_asgi_app(deps.registry)),
-        ],
-    )
+    routes = [
+        ("/health", make_ping_asgi(broker, timeout=5.0)),
+        ("/ready", readiness_asgi(is_ready)),
+        ("/metrics", make_asgi_app(deps.registry)),
+    ]
+    if reranker_ready is not None:
+        routes.append(("/reranker/ready", readiness_asgi(reranker_ready)))
+
+    return AsgiFastStream(broker, asgi_routes=routes)
