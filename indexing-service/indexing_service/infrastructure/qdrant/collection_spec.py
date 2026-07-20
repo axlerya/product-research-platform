@@ -25,6 +25,10 @@ PAYLOAD_INDEXES: tuple[tuple[str, models.PayloadSchemaType], ...] = (
     ("sales_per_month", models.PayloadSchemaType.INTEGER),
     ("review_count", models.PayloadSchemaType.INTEGER),
     ("aggregate_version", models.PayloadSchemaType.INTEGER),
+    # Async-путь (chunked): владелец точки + версия текста (§9.4).
+    ("product_id", models.PayloadSchemaType.KEYWORD),
+    ("content_version", models.PayloadSchemaType.INTEGER),
+    ("chunk_ix", models.PayloadSchemaType.INTEGER),
     ("in_stock", models.PayloadSchemaType.BOOL),
     ("is_deleted", models.PayloadSchemaType.BOOL),
     ("indexed_at", models.PayloadSchemaType.DATETIME),
