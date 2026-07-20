@@ -37,6 +37,11 @@ class Settings(BaseSettings):
 
     # Брокер (источник событий каталога).
     rabbitmq_dsn: str = "amqp://guest:guest@localhost:5672/"
+    # PostgreSQL (indexing jobs + transactional outbox).
+    database_url: str = (
+        "postgresql+asyncpg://indexing:indexing@localhost:5432/indexing"
+    )
+    sql_echo: bool = False
     # Qdrant (поисковая read-model).
     qdrant_url: str = "http://localhost:6333"
     qdrant_api_key: str | None = None

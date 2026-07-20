@@ -15,6 +15,8 @@ def test_defaults():
     assert settings.source_mode is SourceMode.HYBRID
     assert settings.embedding_dim == 1024
     assert settings.max_attempts == 5
+    assert settings.database_url.startswith("postgresql+asyncpg://")
+    assert settings.sql_echo is False
 
 
 def test_env_prefix_override(monkeypatch):
