@@ -20,6 +20,7 @@ def test_defaults():
     assert settings.outbox_poll_interval_s == 1.0
     assert settings.outbox_max_attempts == 10
     assert settings.outbox_batch_size == 100
+    assert settings.max_item_attempts == 5
 
 
 def test_env_prefix_override(monkeypatch):
