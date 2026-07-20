@@ -8,17 +8,14 @@ from embedding_service.application.dto import (
     EmbedQueriesQuery,
     EmbedQueryQuery,
     ProviderStatus,
+    RawTextItem,
 )
-from embedding_service.domain.value_objects.embedding_text import EmbeddingText
 from embedding_service.domain.value_objects.item_error import (
     EmbeddingErrorCode,
     ItemError,
 )
 from embedding_service.domain.value_objects.item_result import (
     EmbeddingItemResult,
-)
-from embedding_service.domain.value_objects.request_item import (
-    EmbeddingRequestItem,
 )
 from embedding_service.domain.value_objects.text_id import TextId
 
@@ -38,12 +35,12 @@ def test_provider_status() -> None:
 def test_embed_documents_command() -> None:
     cmd = EmbedDocumentsCommand(
         request_id="req-1",
-        items=(EmbeddingRequestItem(TextId("p-1"), EmbeddingText("hi")),),
+        items=(RawTextItem(text_id="p-1", text="hi"),),
         return_dense=True,
         return_sparse=True,
     )
     assert cmd.request_id == "req-1"
-    assert cmd.items[0].text.value == "hi"
+    assert cmd.items[0].text == "hi"
 
 
 def test_query_dtos() -> None:
