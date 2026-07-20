@@ -1,0 +1,27 @@
+{
+  "event_id": "0192f0c8-7b3a-7e2d-9a1c-1f2e3d4c5b6a",
+  "event_type": "embedding.documents.requested.v1",
+  "event_version": "1.0",
+  "aggregate_type": "embedding_job",
+  "aggregate_id": "0192f0c8-0000-7000-8000-000000000abc",
+  "occurred_at": "2026-07-20T10:15:30.123456Z",
+  "producer": "read-model-builder",
+  "trace_id": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+  "correlation_id": "c1a2b3c4",
+  "data": {
+    "request_id": "0192f0c8-0000-7000-8000-000000000abc",
+    "model": "BAAI/bge-m3",
+    "return_dense": true,
+    "return_sparse": true,
+    "items": [
+      {
+        "text_id": "prod-001",
+        "text": "Товар: Беспроводные наушники\nБренд: AudioMax\nКатегория: Электроника\nОписание: Премиальные наушники"
+      },
+      {
+        "text_id": "prod-002",
+        "text": "Товар: Кофемашина\nБренд: BrewPro\nКатегория: Бытовая техника\nОписание: Автоматическая кофемашина"
+      }
+    ]
+  }
+}
