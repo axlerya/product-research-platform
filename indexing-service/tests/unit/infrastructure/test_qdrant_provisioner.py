@@ -50,6 +50,8 @@ async def test_ensure_creates_when_absent():
     assert SPARSE_VECTOR in create_kw["sparse_vectors_config"]
     index_fields = [c[1] for c in client.calls if c[0] == "index"]
     assert len(index_fields) == len(PAYLOAD_INDEXES)
+    # Async-путь: две оси версии + владелец точки должны индексироваться.
+    assert {"product_id", "content_version", "chunk_ix"} <= set(index_fields)
 
 
 async def test_ensure_noop_when_exists():
