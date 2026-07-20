@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "embedding.documents.generated.v1 — наш consumer-view (tolerant reader)",
+  "description": "Копия producer-схемы embedding-service (contracts/rabbitmq/producer/documents_generated/1.0.json), но additionalProperties=true на всех уровнях: additive MINOR-эволюция не ломает нас. Проверяем только поля, которые реально читаем.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "event_id",
+    "event_type",
+    "event_version",
+    "aggregate_type",
+    "aggregate_id",
+    "occurred_at",
+    "producer",
+    "data"
+  ],
+  "properties": {
+    "event_id": { "type": "string", "format": "uuid" },
+    "event_type": {
+      "type": "string",
+      "const": "embedding.documents.generated.v1"
+    },
+    "event_version": { "type": "string" },
+    "aggregate_type": { "type": "string", "const": "embedding_job" },
+    "aggregate_id": { "type": "string", "format": "uuid" },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "producer": { "type": "string" },
+    "trace_id": { "type": "string" },
+    "correlation_id": { "type": "string" },
+    "data": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["request_id", "model_version", "dim", "results"],
+      "properties": {
+        "request_id": { "type": "string", "format": "uuid" },
+        "model_version": { "type": "string" },
+        "dim": { "type": "integer" },
+        "results": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["text_id", "status"],
+            "properties": {
+              "text_id": { "type": "string", "minLength": 1 },
+              "status": { "type": "string", "enum": ["ok", "error"] },
+              "dense": { "type": "array", "items": { "type": "number" } },
+              "sparse": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "indices": {
+                    "type": "array",
+                    "items": { "type": "integer", "minimum": 0 }
+                  },
+                  "values": {
+                    "type": "array",
+                    "items": { "type": "number" }
+                  }
+                }
+              },
+              "token_count": { "type": "integer", "minimum": 0 },
+              "error": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "code": { "type": "string" },
+                  "message": { "type": "string" }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
