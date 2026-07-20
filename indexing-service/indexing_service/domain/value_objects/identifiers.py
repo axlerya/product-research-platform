@@ -42,3 +42,31 @@ class ProductId:
     def new(cls) -> Self:
         """Создаёт новый идентификатор с uuidv7."""
         return cls(_uuid7())
+
+
+@dataclass(frozen=True, slots=True)
+class JobId:
+    """Идентификатор indexing job (uuidv7)."""
+
+    value: UUID
+
+    @classmethod
+    def new(cls) -> Self:
+        """Создаёт новый идентификатор с uuidv7."""
+        return cls(_uuid7())
+
+
+@dataclass(frozen=True, slots=True)
+class RequestId:
+    """Идентификатор команды на эмбеддинг.
+
+    Обычно детерминированный (uuid5 от job/attempt/items — строится в
+    application); здесь — типобезопасная обёртка над ``UUID``.
+    """
+
+    value: UUID
+
+    @classmethod
+    def new(cls) -> Self:
+        """Создаёт новый идентификатор с uuidv7."""
+        return cls(_uuid7())
