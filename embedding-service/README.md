@@ -46,3 +46,59 @@ uv run pytest -m "not integration and not slow and not nightly"
 
 Конфигурация — переменными окружения с префиксом `EMBEDDING_` (см.
 `.env.example`).
+
+## CLI
+
+Точка входа — `python -m embedding_service` (Typer):
+
+```bash
+python -m embedding_service describe-model   # model_version / device / precision
+python -m embedding_service warmup           # загрузить и прогреть модель
+python -m embedding_service serve            # обе плоскости (composition root)
+```
+
+`serve` поднимает на одном event loop: gRPC-сервер запросов
+(`EMBEDDING_GRPC_PORT`, по умолчанию `50051`), FastStream-консюмер команд
+документов и ops-плоскость (`EMBEDDING_OPS_HTTP_PORT`, по умолчанию `8000`):
+`/health`, `/ready`, `/metrics`.
+
+## Запуск в Docker
+
+Образы и compose лежат в `docker/` и `docker-compose.yml`. Профили выбирают
+провайдер:
+
+| Профиль | Провайдер | Назначение |
+|---------|-----------|------------|
+| `fake`  | `deterministic` | быстрый end-to-end smoke без torch и загрузки модели |
+| `cpu`   | `bge_m3` на CPU | реальная BAAI/bge-m3, без GPU |
+| `gpu`   | `bge_m3` на CUDA | реальная BAAI/bge-m3, нужен NVIDIA Container Toolkit |
+
+```bash
+# Быстрый smoke: RabbitMQ + сервис в FAKE-режиме.
+docker compose --profile fake up --build
+
+# Реальная модель на CPU (веса кэшируются в volume hf-cache).
+docker compose --profile cpu up --build
+
+# Реальная модель на GPU (требует --gpus, см. deploy.resources в compose).
+docker compose --profile gpu up --build
+```
+
+После старта:
+
+- gRPC — `localhost:50051` (рефлексия включена; `grpc.health.v1` для проб);
+- ops — `http://localhost:8000/ready` (503 пока модель не прогрета → 200),
+  `http://localhost:8000/health`, `http://localhost:8000/metrics`;
+- RabbitMQ management — `http://localhost:15672` (`guest`/`guest`).
+
+Образы собираются отдельно от compose:
+
+```bash
+docker build -f docker/Dockerfile.cpu -t embedding-service:cpu .
+docker build -f docker/Dockerfile.gpu -t embedding-service:gpu .
+```
+
+Контейнер запускается непривилегированным пользователем, PID 1 — `python`
+(корректный graceful-дренаж по `SIGTERM`), готовность отдаёт `HEALTHCHECK` через
+`/ready`. Веса HuggingFace кэшируются в `HF_HOME=/app/.cache/huggingface`
+(volume `hf-cache`).
