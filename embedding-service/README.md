@@ -47,6 +47,32 @@ uv run pytest -m "not integration and not slow and not nightly"
 Конфигурация — переменными окружения с префиксом `EMBEDDING_` (см.
 `.env.example`).
 
+## Reranking (опционально, `BAAI/bge-reranker-v2-m3`)
+
+Отдельная **полностью изолированная** функциональность: cross-encoder
+переупорядочивает документы по релевантности запросу. Не затрагивает генерацию
+dense/sparse эмбеддингов и модель BGE-M3.
+
+- **Транспорт:** отдельный gRPC-сервис `reranker.v1.RerankerService` (метод
+  `Rerank`) на том же порту `:50051`; отдельный proto-контракт.
+- **Переключатель:** `RERANKER_ENABLED` (по умолчанию `false`). Выключен —
+  сервис работает в прежнем режиме, `Rerank` → `UNIMPLEMENTED`.
+- **Изоляция жизненного цикла:** сбой загрузки reranker **не роняет**
+  embeddings — reranker переходит в `NOT_SERVING`, `Rerank` → `UNAVAILABLE`,
+  остальной сервис продолжает работать (graceful degrade).
+- **Настройки:** отдельный префикс `RERANKER_*` (модель, устройство,
+  `MAX_BATCH_SIZE`, `INFERENCE_TIMEOUT_S`, `MAX_CONCURRENT_INFERENCES`, лимиты).
+- **Health/readiness/метрики:** gRPC health по имени `reranker.v1.RerankerService`,
+  HTTP `/reranker/ready`, метрики `reranker_*` в общем `/metrics`.
+- **Установка модели:** `uv sync --extra reranking` (FAKE-режим
+  `RERANKER_PROVIDER_MODE=deterministic` torch не требует).
+
+```bash
+# Включить reranker в FAKE-режиме (без весов):
+RERANKER_ENABLED=true RERANKER_PROVIDER_MODE=deterministic \
+  python -m embedding_service serve
+```
+
 ## CLI
 
 Точка входа — `python -m embedding_service` (Typer):
