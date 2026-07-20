@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "embedding.documents.generated.v1 — producer schema (strict)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "event_id",
+    "event_type",
+    "event_version",
+    "aggregate_type",
+    "aggregate_id",
+    "occurred_at",
+    "producer",
+    "data"
+  ],
+  "properties": {
+    "event_id": { "type": "string", "format": "uuid" },
+    "event_type": {
+      "type": "string",
+      "const": "embedding.documents.generated.v1"
+    },
+    "event_version": { "type": "string", "const": "1.0" },
+    "aggregate_type": { "type": "string", "const": "embedding_job" },
+    "aggregate_id": { "type": "string", "format": "uuid" },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "producer": { "type": "string", "const": "embedding-service" },
+    "trace_id": { "type": "string" },
+    "correlation_id": { "type": "string" },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request_id", "model_version", "dim", "results"],
+      "properties": {
+        "request_id": { "type": "string", "format": "uuid" },
+        "model_version": { "type": "string" },
+        "dim": { "type": "integer", "const": 1024 },
+        "results": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["text_id", "status"],
+                "properties": {
+                  "text_id": { "type": "string", "minLength": 1 },
+                  "status": { "type": "string", "const": "ok" },
+                  "dense": {
+                    "type": "array",
+                    "items": { "type": "number" }
+                  },
+                  "sparse": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["indices", "values"],
+                    "properties": {
+                      "indices": {
+                        "type": "array",
+                        "items": { "type": "integer", "minimum": 0 }
+                      },
+                      "values": {
+                        "type": "array",
+                        "items": { "type": "number" }
+                      }
+                    }
+                  },
+                  "token_count": { "type": "integer", "minimum": 0 }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["text_id", "status", "error"],
+                "properties": {
+                  "text_id": { "type": "string", "minLength": 1 },
+                  "status": { "type": "string", "const": "error" },
+                  "error": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["code", "message"],
+                    "properties": {
+                      "code": {
+                        "type": "string",
+                        "enum": [
+                          "EMPTY_TEXT",
+                          "TEXT_TOO_LONG",
+                          "TOKENS_EXCEEDED",
+                          "INFERENCE_FAILED"
+                        ]
+                      },
+                      "message": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}
