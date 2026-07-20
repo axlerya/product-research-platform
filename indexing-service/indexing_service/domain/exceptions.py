@@ -55,3 +55,11 @@ class InvalidModelIdError(DomainError):
 
 class InvalidWatermarkError(DomainError):
     """Некорректный водяной знак индексации (версия < 1)."""
+
+
+class InvalidJobError(DomainError):
+    """Некорректное состояние indexing job."""
+
+
+class InvalidRequestError(DomainError):
+    """Некорректная команда на эмбеддинг."""
