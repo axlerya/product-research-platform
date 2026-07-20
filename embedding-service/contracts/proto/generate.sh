@@ -26,3 +26,23 @@ text = text.replace(
 io.open(path, "w", encoding="utf-8", newline="\n").write(text)
 print("stubs generated + import fixed")
 PY
+
+# --- reranker (изолированный пакет reranker.v1, отдельный сервис) ---
+uv run python -m grpc_tools.protoc \
+  -I contracts/proto/reranker/v1 \
+  --python_out="$OUT" \
+  --grpc_python_out="$OUT" \
+  --pyi_out="$OUT" \
+  reranker.proto
+
+uv run python - <<'PY'
+import io
+
+path = "embedding_service/infrastructure/grpc/_generated/reranker_pb2_grpc.py"
+text = io.open(path, encoding="utf-8").read()
+text = text.replace(
+    "import reranker_pb2 as", "from . import reranker_pb2 as"
+)
+io.open(path, "w", encoding="utf-8", newline="\n").write(text)
+print("reranker stubs generated + import fixed")
+PY

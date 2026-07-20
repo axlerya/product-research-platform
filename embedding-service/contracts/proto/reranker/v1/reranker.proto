@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package reranker.v1;
+
+option go_package = "reranker/v1;rerankerv1";
+
+// Синхронное переупорядочивание документов по релевантности запросу
+// (cross-encoder BAAI/bge-reranker-v2-m3). Полностью изолировано от
+// EmbeddingService: отдельный пакет и отдельный сервис. Каждый вызов ОБЯЗАН
+// нести gRPC deadline.
+service RerankerService {
+  // Unary: query + N документов → те же документы, отранжированные по убыванию
+  // релевантности (с учётом top_n). Fail-fast: любой невалидный вход →
+  // INVALID_ARGUMENT; reranker выключен/не готов → UNAVAILABLE.
+  rpc Rerank(RerankRequest) returns (RerankResponse);
+}
+
+// Документ-кандидат для ранжирования.
+message RerankDocument {
+  string id = 1;    // непрозрачный идентификатор (корреляция/порядок)
+  string text = 2;  // текст документа
+}
+
+message RerankRequest {
+  string query = 1;                       // непустой; лимиты — политика reranker
+  repeated RerankDocument documents = 2;  // minItems 1, maxItems max_documents
+  optional uint32 top_n = 3;              // не задан → вернуть все
+  bool return_documents = 4;              // эхо текста документа в ответе
+}
+
+// Отранжированный документ: id, исходная позиция и скор.
+message RankedDocument {
+  string id = 1;     // id из запроса
+  uint32 index = 2;  // исходная позиция во входе (0-based)
+  double score = 3;  // скор релевантности (при normalized — [0, 1])
+  string text = 4;   // присутствует только при return_documents=true
+}
+
+message RerankResponse {
+  repeated RankedDocument results = 1;  // по убыванию score, усечено до top_n
+  string model_version = 2;             // = RerankerModelId.key (водяной знак)
+}
