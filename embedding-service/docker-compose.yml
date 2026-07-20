@@ -1,0 +1,103 @@
+# Локальный запуск embedding-service + RabbitMQ. Профили выбирают провайдер:
+#   fake — детерминированный FAKE (без torch/модели), быстрый end-to-end smoke;
+#   cpu  — реальная BAAI/bge-m3 на CPU;
+#   gpu  — реальная BAAI/bge-m3 на CUDA (нужен NVIDIA Container Toolkit).
+# Примеры:
+#   docker compose --profile fake up --build
+#   docker compose --profile cpu  up --build
+#   docker compose --profile gpu  up --build
+name: embedding-service
+
+# Общие переменные окружения сервиса (адрес брокера — внутренний DNS compose).
+x-embedding-env: &embedding-env
+  EMBEDDING_RABBITMQ_DSN: amqp://guest:guest@rabbitmq:5672/
+  EMBEDDING_GRPC_HOST: "0.0.0.0"
+  EMBEDDING_GRPC_PORT: "50051"
+  EMBEDDING_OPS_HOST: "0.0.0.0"
+  EMBEDDING_OPS_HTTP_PORT: "8000"
+
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # management UI
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [embedding]
+
+  # FAKE: детерминированный провайдер, без torch и без загрузки модели.
+  embedding-fake:
+    profiles: ["fake"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.cpu
+    environment:
+      <<: *embedding-env
+      EMBEDDING_PROVIDER_MODE: deterministic
+      EMBEDDING_DIM: "1024"
+    ports:
+      - "50051:50051"  # gRPC (запросы)
+      - "8000:8000"    # ops: /health, /ready, /metrics
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks: [embedding]
+
+  # CPU: реальная BAAI/bge-m3 на CPU; веса кэшируются на volume между запусками.
+  embedding-cpu:
+    profiles: ["cpu"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.cpu
+    environment:
+      <<: *embedding-env
+      EMBEDDING_PROVIDER_MODE: bge_m3
+      EMBEDDING_DEVICE: cpu
+      EMBEDDING_PRECISION: fp32
+    volumes:
+      - hf-cache:/app/.cache/huggingface
+    ports:
+      - "50051:50051"
+      - "8000:8000"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks: [embedding]
+
+  # GPU: реальная BAAI/bge-m3 на CUDA; нужен NVIDIA Container Toolkit на хосте.
+  embedding-gpu:
+    profiles: ["gpu"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.gpu
+    environment:
+      <<: *embedding-env
+      EMBEDDING_PROVIDER_MODE: bge_m3
+      EMBEDDING_DEVICE: cuda
+      EMBEDDING_PRECISION: fp16
+    volumes:
+      - hf-cache:/app/.cache/huggingface
+    ports:
+      - "50051:50051"
+      - "8000:8000"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks: [embedding]
+
+volumes:
+  hf-cache:
+
+networks:
+  embedding:

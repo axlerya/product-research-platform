@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     rabbitmq_dsn: str = "amqp://guest:guest@localhost:5672/"
     grpc_host: str = "0.0.0.0"
     grpc_port: int = 50051
+    ops_host: str = "0.0.0.0"
     ops_http_port: int = 8000
 
     # --- Провайдер эмбеддингов ---
