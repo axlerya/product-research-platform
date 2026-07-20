@@ -6,7 +6,7 @@
 который их использует (`ApplyEmbeddingResult`).
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 from indexing_service.domain.exceptions import InvalidJobError
@@ -47,6 +47,20 @@ class Chunk:
             raise InvalidJobError("point_id чанка не может быть пустым")
         if self.attempts < 0:
             raise InvalidJobError(f"attempts < 0: {self.attempts}")
+
+    def mark_ok(self) -> "Chunk":
+        """Успешный эмбеддинг: чанк записан в Qdrant."""
+        return replace(self, status=ChunkStatus.OK)
+
+    def mark_retrying(self) -> "Chunk":
+        """Транзиентный сбой: ставим на повтор (счётчик попыток +1)."""
+        return replace(
+            self, status=ChunkStatus.RETRYING, attempts=self.attempts + 1
+        )
+
+    def mark_failed(self) -> "Chunk":
+        """Перманентный отказ: чанк не будет проиндексирован."""
+        return replace(self, status=ChunkStatus.FAILED)
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,3 +112,58 @@ class IndexingJob:
         text_ids = [chunk.text_id for chunk in self.chunks]
         if len(set(text_ids)) != len(text_ids):
             raise InvalidJobError("text_id чанков должны быть уникальны")
+
+    @property
+    def is_terminal(self) -> bool:
+        """Достигла ли job финального состояния (``DONE``/``FAILED``)."""
+        return self.status in (JobStatus.DONE, JobStatus.FAILED)
+
+    def chunk_by_text_id(self, text_id: str) -> Chunk:
+        """Возвращает чанк по ``text_id``.
+
+        Raises:
+            InvalidJobError: Если чанк с таким ``text_id`` не найден.
+        """
+        for chunk in self.chunks:
+            if chunk.text_id == text_id:
+                return chunk
+        raise InvalidJobError(f"чанк не найден: text_id={text_id!r}")
+
+    def mark_chunk_ok(self, text_id: str) -> "IndexingJob":
+        """Помечает чанк успешным (записан в Qdrant)."""
+        return self._map_chunk(text_id, Chunk.mark_ok)
+
+    def mark_chunk_retrying(self, text_id: str) -> "IndexingJob":
+        """Ставит чанк на повтор (транзиентный сбой)."""
+        return self._map_chunk(text_id, Chunk.mark_retrying)
+
+    def mark_chunk_failed(self, text_id: str) -> "IndexingJob":
+        """Помечает чанк перманентно упавшим."""
+        return self._map_chunk(text_id, Chunk.mark_failed)
+
+    def recompute_status(self) -> "IndexingJob":
+        """Пересчитывает статус job из статусов чанков (§8)."""
+        return replace(self, status=self._derive_status())
+
+    def _map_chunk(self, text_id: str, transition) -> "IndexingJob":
+        self.chunk_by_text_id(text_id)  # проверка наличия
+        chunks = tuple(
+            transition(chunk) if chunk.text_id == text_id else chunk
+            for chunk in self.chunks
+        )
+        return replace(self, chunks=chunks)
+
+    def _derive_status(self) -> JobStatus:
+        statuses = {chunk.status for chunk in self.chunks}
+        in_flight = statuses & {ChunkStatus.PENDING, ChunkStatus.RETRYING}
+        if not in_flight:
+            # Терминал: остались только ok/failed.
+            return (
+                JobStatus.DONE
+                if ChunkStatus.FAILED not in statuses
+                else JobStatus.FAILED
+            )
+        # Ещё в процессе: ждём результаты по части чанков.
+        if ChunkStatus.FAILED in statuses or ChunkStatus.RETRYING in statuses:
+            return JobStatus.PARTIALLY_FAILED
+        return JobStatus.AWAITING
