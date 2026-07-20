@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     prefetch_count: int = 32
     max_attempts: int = 5
     retry_ttl_ms: int = 30000
+    # Outbox relay (публикация команд на эмбеддинг в embedding.jobs).
+    outbox_poll_interval_s: float = 1.0
+    outbox_max_attempts: int = 10
+    outbox_batch_size: int = 100
     log_level: str = "INFO"
     # Наблюдаемость: OTLP-endpoint трейсинга (пусто = трейсинг выключен).
     otlp_endpoint: str | None = None
