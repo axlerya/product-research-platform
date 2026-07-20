@@ -66,6 +66,8 @@ class Settings(BaseSettings):
     outbox_poll_interval_s: float = 1.0
     outbox_max_attempts: int = 10
     outbox_batch_size: int = 100
+    # Максимум попыток эмбеддинга одного чанка (INFERENCE_FAILED) до DLQ.
+    max_item_attempts: int = 5
     log_level: str = "INFO"
     # Наблюдаемость: OTLP-endpoint трейсинга (пусто = трейсинг выключен).
     otlp_endpoint: str | None = None
