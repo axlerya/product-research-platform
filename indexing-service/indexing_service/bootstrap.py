@@ -11,6 +11,9 @@ from faststream.rabbit import RabbitBroker
 from qdrant_client import AsyncQdrantClient
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from indexing_service.application.use_cases.apply_embedding_result import (
+    ApplyEmbeddingResult,
+)
 from indexing_service.application.use_cases.process_catalog_event import (
     ProcessCatalogEvent,
 )
@@ -28,6 +31,9 @@ from indexing_service.infrastructure.db.engine import (
     build_engine,
     build_sessionmaker,
 )
+from indexing_service.infrastructure.db.unit_of_work import (
+    SqlAlchemyUnitOfWork,
+)
 from indexing_service.infrastructure.embedding.deterministic import (
     DeterministicEmbeddingModel,
 )
@@ -38,6 +44,9 @@ from indexing_service.infrastructure.messaging.broker import (
 from indexing_service.infrastructure.outbox.relay import OutboxPublisher
 from indexing_service.infrastructure.qdrant.collection_provisioner import (
     CollectionProvisioner,
+)
+from indexing_service.infrastructure.qdrant.embedding_sink import (
+    QdrantEmbeddingSink,
 )
 from indexing_service.infrastructure.qdrant.index_admin import QdrantIndexAdmin
 from indexing_service.infrastructure.qdrant.vector_index import (
@@ -144,6 +153,36 @@ def build_relay(settings: Settings) -> RelayDeps:
         interval=settings.outbox_poll_interval_s,
         engine=engine,
     )
+
+
+@dataclass
+class ResultConsumerDeps:
+    """Зависимости консюмера результатов эмбеддинга + закрытие ресурсов."""
+
+    use_case: ApplyEmbeddingResult
+    engine: AsyncEngine
+    qdrant: AsyncQdrantClient
+
+    async def aclose(self) -> None:
+        await self.qdrant.close()
+        await self.engine.dispose()
+
+
+def build_result_consumer(settings: Settings) -> ResultConsumerDeps:
+    """Собирает ``ApplyEmbeddingResult`` (UoW + Qdrant-sink)."""
+    engine = build_engine(settings)
+    uow = SqlAlchemyUnitOfWork(build_sessionmaker(engine))
+    qdrant = AsyncQdrantClient(
+        url=settings.qdrant_url, api_key=settings.qdrant_api_key or None
+    )
+    use_case = ApplyEmbeddingResult(
+        uow,
+        QdrantEmbeddingSink(qdrant, collection=settings.collection_alias),
+        SystemClock(),
+        expected_dim=settings.embedding_dim,
+        max_item_attempts=settings.max_item_attempts,
+    )
+    return ResultConsumerDeps(use_case=use_case, engine=engine, qdrant=qdrant)
 
 
 async def build_batch(settings: Settings) -> BatchDeps:
