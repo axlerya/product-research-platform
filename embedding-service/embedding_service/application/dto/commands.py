@@ -5,9 +5,22 @@ from dataclasses import dataclass
 from embedding_service.domain.value_objects.item_result import (
     EmbeddingItemResult,
 )
-from embedding_service.domain.value_objects.request_item import (
-    EmbeddingRequestItem,
-)
+
+
+@dataclass(frozen=True, slots=True)
+class RawTextItem:
+    """Сырой элемент документного батча (до доменной валидации).
+
+    Тексты приходят строками с провода; валидация и построение VO —
+    в use case ``EmbedDocuments`` (иначе невозможен партиал per-item).
+
+    Attributes:
+        text_id: Непрозрачный идентификатор элемента (корреляция/порядок).
+        text: Сырой текст документа.
+    """
+
+    text_id: str
+    text: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,13 +29,13 @@ class EmbedDocumentsCommand:
 
     Attributes:
         request_id: Ключ идемпотентности/корреляции.
-        items: Элементы батча в порядке входа.
+        items: Сырые элементы батча в порядке входа.
         return_dense: Запросить dense-вектор.
         return_sparse: Запросить sparse-вектор.
     """
 
     request_id: str
-    items: tuple[EmbeddingRequestItem, ...]
+    items: tuple[RawTextItem, ...]
     return_dense: bool
     return_sparse: bool
 

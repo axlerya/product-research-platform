@@ -5,6 +5,7 @@ from embedding_service.application.dto.commands import (
     EmbedDocumentsCommand,
     EmbedQueriesQuery,
     EmbedQueryQuery,
+    RawTextItem,
 )
 from embedding_service.application.dto.provider_status import ProviderStatus
 
@@ -14,4 +15,5 @@ __all__ = [
     "EmbedQueriesQuery",
     "EmbedQueryQuery",
     "ProviderStatus",
+    "RawTextItem",
 ]
