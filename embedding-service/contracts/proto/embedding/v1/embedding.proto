@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package embedding.v1;
+
+option go_package = "embedding/v1;embeddingv1";
+
+// Синхронный эмбеддинг поисковых запросов (dense + sparse) моделью BGE-M3.
+// Владелец контракта — embedding-service. Клиент (retrieval-service) —
+// tolerant. Каждый вызов ОБЯЗАН нести gRPC deadline.
+service EmbeddingService {
+  // Unary: один запрос → один вектор. Fail-fast: битый вход → INVALID_ARGUMENT.
+  rpc EmbedQuery(EmbedQueryRequest) returns (EmbedQueryResponse);
+
+  // Batch: N запросов → N векторов. Порядок embeddings СТРОГО совпадает
+  // с порядком texts (embeddings[i] соответствует texts[i]). Fail-fast:
+  // любой невалидный элемент батча → INVALID_ARGUMENT для всего вызова.
+  rpc EmbedQueries(EmbedQueriesRequest) returns (EmbedQueriesResponse);
+}
+
+// Плотный вектор: ровно `dim` компонент, L2-нормирован (инвариант BGE-M3).
+message DenseVector {
+  repeated float values = 1;
+}
+
+// Разреженный вектор (lexical weights BGE-M3). indices и values —
+// параллельные массивы одинаковой длины; indices отсортированы,
+// уникальны; values конечны и ненулевые. Пустой sparse допустим.
+message SparseVector {
+  repeated uint32 indices = 1;
+  repeated float values = 2;
+}
+
+// Эмбеддинг одного запроса: dense + sparse + число токенов (после усечения).
+message QueryEmbedding {
+  DenseVector dense = 1;
+  SparseVector sparse = 2;
+  uint32 token_count = 3;
+}
+
+message EmbedQueryRequest {
+  string text = 1;        // непустой; лимиты длины/токенов — политика QUERY
+  string request_id = 2;  // опц., клиентский id для корреляции/логов/трейсов
+}
+
+message EmbedQueryResponse {
+  QueryEmbedding embedding = 1;
+  string model_version = 2;  // = EmbeddingModelId.key (водяной знак модели)
+  uint32 dim = 3;            // = 1024
+}
+
+message EmbedQueriesRequest {
+  repeated string texts = 1;  // minItems 1, maxItems = max_texts (QUERY-лимит)
+  string request_id = 2;
+}
+
+message EmbedQueriesResponse {
+  repeated QueryEmbedding embeddings = 1;  // порядок == texts
+  string model_version = 2;
+  uint32 dim = 3;
+}
