@@ -1,0 +1,63 @@
+# syntax=docker/dockerfile:1.7
+# GPU-образ embedding-service: реальная BAAI/bge-m3 на CUDA. База — образ NVIDIA
+# с CUDA 12.4 + cuDNN runtime; torch тянется CUDA-колёсами по умолчанию с PyPI.
+# Требует NVIDIA Container Toolkit на хосте (`--gpus all` / deploy.resources).
+
+# ---- builder ----
+FROM nvidia/cuda:12.6.2-cudnn-runtime-ubuntu24.04 AS builder
+
+# Ubuntu 24.04 несёт Python 3.12 в apt. venv/dev нужны для сборки колёс.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        python3.12 python3.12-venv python3.12-dev ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:0.9.26 /uv /usr/local/bin/uv
+
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_PYTHON=python3.12
+
+WORKDIR /app
+
+# torch по умолчанию с PyPI = CUDA-сборка — под GPU-базу это и нужно.
+COPY pyproject.toml uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-install-project --extra embedding
+
+COPY embedding_service ./embedding_service
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-editable --extra embedding
+
+# ---- runtime ----
+FROM nvidia/cuda:12.6.2-cudnn-runtime-ubuntu24.04 AS runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        python3.12 python3.12-venv curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --system app && useradd --system --gid app --home-dir /app app
+
+WORKDIR /app
+COPY --from=builder --chown=app:app /app/.venv /app/.venv
+COPY --chown=app:app docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh \
+    && mkdir -p /app/.cache/huggingface && chown -R app:app /app/.cache
+
+ENV PATH="/app/.venv/bin:${PATH}" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    HF_HOME=/app/.cache/huggingface \
+    EMBEDDING_DEVICE=cuda \
+    EMBEDDING_PRECISION=fp16
+
+USER app
+EXPOSE 50051 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
+    CMD curl -fsS http://localhost:8000/ready || exit 1
+
+ENTRYPOINT ["entrypoint.sh"]
+CMD ["serve"]
