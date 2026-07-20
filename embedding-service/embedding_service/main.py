@@ -51,7 +51,13 @@ async def run() -> None:  # pragma: no cover - runtime (запуск серве�
 
     await server.start()
     try:
-        await app.run()  # блокирует: uvicorn (ops+/metrics) + broker lifespan
+        # блокирует: uvicorn (ops+/metrics) + broker lifespan.
+        await app.run(
+            run_extra_options={
+                "host": settings.ops_host,
+                "port": settings.ops_http_port,
+            }
+        )
     finally:
         ready["value"] = False
         await set_serving(health, serving=False)

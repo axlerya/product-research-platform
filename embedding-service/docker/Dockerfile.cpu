@@ -1,0 +1,67 @@
+# syntax=docker/dockerfile:1.7
+# CPU-образ embedding-service: реальная BAAI/bge-m3 на CPU (extra "embedding",
+# torch с CPU-колёсами) либо детерминированный FAKE-режим для smoke.
+# Многослойная сборка: тяжёлые зависимости ставятся в изолированный .venv,
+# в runtime переносится только он.
+
+# ---- builder ----
+FROM python:3.12-slim AS builder
+
+# uv — быстрый воспроизводимый установщик (берём бинарь из официального образа).
+COPY --from=ghcr.io/astral-sh/uv:0.9.26 /uv /usr/local/bin/uv
+
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never
+
+# torch тянем как CPU-колёса (иначе PyPI отдаёт CUDA-сборку в ~2 ГБ).
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+ENV UV_EXTRA_INDEX_URL=${TORCH_INDEX_URL}
+
+WORKDIR /app
+
+# Сначала только манифесты — слой зависимостей кэшируется между сборками.
+COPY pyproject.toml uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-install-project --extra embedding
+
+# Затем исходники и установка самого пакета в .venv (не editable).
+COPY embedding_service ./embedding_service
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-editable --extra embedding
+
+# ---- runtime ----
+FROM python:3.12-slim AS runtime
+
+# curl — только для HEALTHCHECK; чистим списки apt в том же слое.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Непривилегированный пользователь (не root в контейнере).
+RUN groupadd --system app && useradd --system --gid app --home-dir /app app
+
+WORKDIR /app
+COPY --from=builder --chown=app:app /app/.venv /app/.venv
+COPY --chown=app:app docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh \
+    && mkdir -p /app/.cache/huggingface && chown -R app:app /app/.cache
+
+ENV PATH="/app/.venv/bin:${PATH}" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    HF_HOME=/app/.cache/huggingface \
+    EMBEDDING_DEVICE=cpu \
+    EMBEDDING_PRECISION=fp32
+
+USER app
+EXPOSE 50051 8000
+
+# Готовность отдаёт /ready (503 пока модель не прогрета). start-period с запасом:
+# первая загрузка BAAI/bge-m3 (~2.3 ГБ) может занять минуты. В FAKE-режиме
+# готовность наступает мгновенно.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
+    CMD curl -fsS http://localhost:8000/ready || exit 1
+
+ENTRYPOINT ["entrypoint.sh"]
+CMD ["serve"]

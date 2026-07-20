@@ -14,3 +14,9 @@ htmlcov
 ARCHITECTURE.md
 AGENTS.md
 CLAUDE.md
+# В образ не нужны — уменьшаем контекст сборки.
+tests
+contracts
+.github
+docker-compose.yml
+README.md
