@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "embedding.documents.requested.v1 — наш producer-контракт (что публикуем)",
+  "description": "Копия consumer-view embedding-service (contracts/rabbitmq/consumer/documents_requested/1.0.json). Наша команда ОБЯЗАНА ему удовлетворять; contract-тест валидирует построенный конверт против этой схемы.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "event_id",
+    "event_type",
+    "event_version",
+    "aggregate_type",
+    "occurred_at",
+    "producer",
+    "data"
+  ],
+  "properties": {
+    "event_id": { "type": "string", "format": "uuid" },
+    "event_type": {
+      "type": "string",
+      "const": "embedding.documents.requested.v1"
+    },
+    "event_version": { "type": "string" },
+    "aggregate_type": { "type": "string", "const": "embedding_job" },
+    "aggregate_id": { "type": "string", "format": "uuid" },
+    "occurred_at": { "type": "string" },
+    "producer": { "type": "string" },
+    "trace_id": { "type": "string" },
+    "correlation_id": { "type": "string" },
+    "data": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["request_id", "return_dense", "return_sparse", "items"],
+      "properties": {
+        "request_id": { "type": "string", "format": "uuid" },
+        "model": { "type": "string" },
+        "return_dense": { "type": "boolean" },
+        "return_sparse": { "type": "boolean" },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["text_id", "text"],
+            "properties": {
+              "text_id": { "type": "string", "minLength": 1 },
+              "text": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  }
+}
