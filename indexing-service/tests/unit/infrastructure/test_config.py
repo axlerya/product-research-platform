@@ -17,6 +17,9 @@ def test_defaults():
     assert settings.max_attempts == 5
     assert settings.database_url.startswith("postgresql+asyncpg://")
     assert settings.sql_echo is False
+    assert settings.outbox_poll_interval_s == 1.0
+    assert settings.outbox_max_attempts == 10
+    assert settings.outbox_batch_size == 100
 
 
 def test_env_prefix_override(monkeypatch):
