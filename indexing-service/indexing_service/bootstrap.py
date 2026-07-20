@@ -7,7 +7,9 @@
 from dataclasses import dataclass
 
 import httpx
+from faststream.rabbit import RabbitBroker
 from qdrant_client import AsyncQdrantClient
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from indexing_service.application.use_cases.process_catalog_event import (
     ProcessCatalogEvent,
@@ -22,9 +24,18 @@ from indexing_service.infrastructure.catalog.http_client import (
     HttpCatalogClient,
 )
 from indexing_service.infrastructure.config import EmbeddingMode, Settings
+from indexing_service.infrastructure.db.engine import (
+    build_engine,
+    build_sessionmaker,
+)
 from indexing_service.infrastructure.embedding.deterministic import (
     DeterministicEmbeddingModel,
 )
+from indexing_service.infrastructure.messaging.broker import (
+    RabbitEmbeddingPublisher,
+    build_broker,
+)
+from indexing_service.infrastructure.outbox.relay import OutboxPublisher
 from indexing_service.infrastructure.qdrant.collection_provisioner import (
     CollectionProvisioner,
 )
@@ -101,6 +112,38 @@ class BatchDeps:
     async def aclose(self) -> None:
         await self.qdrant.close()
         await self.http.aclose()
+
+
+@dataclass
+class RelayDeps:
+    """Зависимости outbox-relay + закрытие ресурсов."""
+
+    broker: RabbitBroker
+    publisher: OutboxPublisher
+    interval: float
+    engine: AsyncEngine
+
+    async def aclose(self) -> None:
+        await self.engine.dispose()
+
+
+def build_relay(settings: Settings) -> RelayDeps:
+    """Собирает outbox-relay (движок БД + брокер + publisher)."""
+    engine = build_engine(settings)
+    sessionmaker = build_sessionmaker(engine)
+    broker = build_broker(settings)
+    publisher = OutboxPublisher(
+        sessionmaker,
+        RabbitEmbeddingPublisher(broker),
+        max_attempts=settings.outbox_max_attempts,
+        batch_size=settings.outbox_batch_size,
+    )
+    return RelayDeps(
+        broker=broker,
+        publisher=publisher,
+        interval=settings.outbox_poll_interval_s,
+        engine=engine,
+    )
 
 
 async def build_batch(settings: Settings) -> BatchDeps:
