@@ -34,7 +34,8 @@ dev = [
     "pytest-randomly>=3.15",
     "ruff>=0.13",
     "import-linter>=2.1",
-    "testcontainers[rabbitmq]>=4.14",
+    "testcontainers[rabbitmq,postgresql]>=4.14",
+    "psycopg2-binary>=2.9.12",
     "jsonschema>=4.22",
 ]
 
@@ -97,7 +98,7 @@ addopts = "--strict-markers"
 testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
-    "integration: требует Qdrant/RabbitMQ (testcontainers)",
+    "integration: требует Qdrant/RabbitMQ/Postgres (testcontainers)",
     "contract: контрактные тесты событий/схемы коллекции",
     "slow: длительные (реальный BGE-M3, relay-конкуренция)",
 ]
