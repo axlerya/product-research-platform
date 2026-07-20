@@ -1,0 +1,166 @@
+[project]
+name = "embedding-service"
+version = "0.1.0"
+description = "Единый inference-слой dense+sparse эмбеддингов (BAAI/bge-m3) для платформы исследования товаров"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "faststream[rabbit]>=0.6",
+    "grpcio>=1.66",
+    "grpcio-health-checking>=1.66",
+    "grpcio-reflection>=1.66",
+    "typer>=0.12",
+    "prometheus-client>=0.25.0",
+    "uvicorn[standard]>=0.51.0",
+    "opentelemetry-sdk>=1.44.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.44.0",
+]
+
+[project.optional-dependencies]
+# Тяжёлый in-process эмбеддер (тянет torch/transformers) — опционально; за портом
+# EmbeddingProvider. Для unit/contract-тестов и FAKE-режима не нужен.
+embedding = [
+    "FlagEmbedding>=1.3",
+    "transformers>=4.44",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5",
+    "pytest-randomly>=3.15",
+    "ruff>=0.13",
+    "import-linter>=2.1",
+    "testcontainers[rabbitmq]>=4.14",
+    "jsonschema>=4.22",
+    "grpcio-tools>=1.66",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["embedding_service"]
+
+# --- Линт/формат ---
+[tool.ruff]
+target-version = "py312"
+# Google Python Style Guide — максимум 80 символов в строке.
+line-length = 80
+# Сгенерированные protoc-стабы не редактируются вручную — вне линта.
+extend-exclude = ["embedding_service/infrastructure/grpc/_generated"]
+
+[tool.ruff.lint]
+# E/F — pyflakes+pycodestyle, I — isort, UP — pyupgrade, B — bugbear,
+# TID — запрет «чужих» импортов по слоям, ASYNC, RUF — ruff-специфичные.
+select = ["E", "F", "I", "UP", "B", "TID", "ASYNC", "RUF"]
+# RUF001-003 — «неоднозначные» кириллические символы: проект русскоязычный,
+# докстринги и комментарии на русском намеренно.
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.flake8-bugbear]
+# DI-идиома FastStream/FastAPI: вызов Context/Depends в дефолтах аргументов
+# обязателен фреймворком — это не мутабельный дефолт (B008).
+extend-immutable-calls = [
+    "faststream.Context",
+    "faststream.Depends",
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Path",
+    "typer.Option",
+    "typer.Argument",
+]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"FlagEmbedding".msg = "Эмбеддер — только infrastructure.embedding."
+"torch".msg = "Тензоры/CUDA — только infrastructure.embedding."
+"transformers".msg = "Токенайзер — только infrastructure.embedding."
+"grpc".msg = "gRPC — только presentation.grpc и infrastructure.grpc."
+"faststream".msg = "Брокер — только infrastructure и presentation.messaging."
+"pydantic".msg = "Pydantic — только presentation и infrastructure.config."
+
+[tool.ruff.lint.per-file-ignores]
+# Инфраструктуре, presentation и тестам можно фреймворки/клиенты.
+"embedding_service/infrastructure/**" = ["TID251"]
+"embedding_service/presentation/**" = ["TID251"]
+# Composition root легально пересекает слои (проводка адаптеров).
+"embedding_service/bootstrap.py" = ["TID251"]
+"embedding_service/main.py" = ["TID251"]
+"tests/**" = ["TID251"]
+
+# --- Тесты ---
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+addopts = "--strict-markers"
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "integration: требует RabbitMQ/gRPC (testcontainers / in-process)",
+    "contract: контрактные тесты RabbitMQ-схем и Protobuf",
+    "slow: длительные (реальный BGE-M3, нагрузочные)",
+    "nightly: только по расписанию (реальная модель, perf)",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["embedding_service"]
+# Composition root и runtime-обвязку (проводка/запуск/сгенерированные стабы)
+# проверяем e2e/через docker-compose, а не unit-тестами.
+omit = [
+    "embedding_service/__main__.py",
+    "embedding_service/main.py",
+    "embedding_service/bootstrap.py",
+    "embedding_service/presentation/messaging/consumer_app.py",
+    "embedding_service/presentation/grpc/server.py",
+    "embedding_service/presentation/api/app.py",
+    "embedding_service/presentation/cli/*",
+    "embedding_service/infrastructure/grpc/_generated/*",
+]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+
+# --- Правило зависимостей Clean Architecture (исполняемый инвариант) ---
+[tool.importlinter]
+root_package = "embedding_service"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "domain не знает фреймворков и внешних слоёв"
+type = "forbidden"
+source_modules = ["embedding_service.domain"]
+forbidden_modules = [
+    "FlagEmbedding",
+    "torch",
+    "transformers",
+    "grpc",
+    "faststream",
+    "pydantic",
+    "opentelemetry",
+]
+
+[[tool.importlinter.contracts]]
+name = "application не знает фреймворков"
+type = "forbidden"
+source_modules = ["embedding_service.application"]
+forbidden_modules = [
+    "FlagEmbedding",
+    "torch",
+    "transformers",
+    "grpc",
+    "faststream",
+    "pydantic",
+    "opentelemetry",
+]
+
+[[tool.importlinter.contracts]]
+name = "слои направлены внутрь (application -> domain)"
+type = "layers"
+layers = [
+    "embedding_service.application",
+    "embedding_service.domain",
+]
