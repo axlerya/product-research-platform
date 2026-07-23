@@ -2,6 +2,10 @@
 
 Проверяют все ветки действий, merge-семантику сиблингов одной версии,
 gap-repair, дедуп ре-эмбеддинга, защиту от воскрешения и poison.
+
+После cutover (шаг 5) ветки created/content/repair векторы не считают: они
+пишут карточку товара и ставят задание через ``RequestEmbedding``. Поэтому
+здесь же проверяется, что job и команда действительно появляются.
 """
 
 from datetime import UTC, date, datetime
@@ -24,13 +28,18 @@ from indexing_service.application.exceptions import (
 from indexing_service.application.use_cases.process_catalog_event import (
     ProcessCatalogEvent,
 )
+from indexing_service.application.use_cases.request_embedding import (
+    RequestEmbedding,
+)
 from indexing_service.domain.services.change_classifier import IndexingAction
+from indexing_service.domain.services.chunking import SingleDocument
 from indexing_service.domain.services.document_composer import compose
 from indexing_service.domain.value_objects.content_hash import ContentHash
 from indexing_service.domain.value_objects.identifiers import ProductId
+from indexing_service.domain.value_objects.job_status import IndexAction
 from tests.support.fakes import (
     FakeCatalogGateway,
-    FakeEmbeddingModel,
+    FakeUnitOfWork,
     FakeVectorIndex,
     FixedClock,
 )
@@ -132,67 +141,122 @@ def _hash(name: str = "Наушники") -> str:
     return ContentHash.of(text.value).value
 
 
-def _uc(index, embedder=None, catalog=None) -> ProcessCatalogEvent:
+def _uc(
+    index, uow=None, catalog=None, *, expected_model=None
+) -> ProcessCatalogEvent:
+    clock = FixedClock(NOW)
     return ProcessCatalogEvent(
         index=index,
-        embedder=embedder or FakeEmbeddingModel(),
+        request_embedding=RequestEmbedding(
+            uow if uow is not None else FakeUnitOfWork(),
+            clock,
+            chunker=SingleDocument(),
+            expected_model=expected_model,
+            max_texts=32,
+        ),
         catalog=catalog or FakeCatalogGateway(),
-        clock=FixedClock(NOW),
+        clock=clock,
+        expected_model=expected_model,
     )
 
 
 # --- created ---
-async def test_created_full_index():
-    index, embedder = FakeVectorIndex(), FakeEmbeddingModel()
-    action = await _uc(index, embedder).handle(_created(1))
+async def test_created_writes_card_and_requests_embedding():
+    index, uow = FakeVectorIndex(), FakeUnitOfWork()
+    action = await _uc(index, uow).handle(_created(1))
+
     assert action is IndexingAction.FULL_INDEX
-    assert embedder.calls == 1
-    assert len(index.upserts) == 1
+    # карточка товара видна фильтрам сразу, векторов ещё нет
+    assert len(index.payload_upserts) == 1
     payload = index.payload_of(PID)
     assert payload["price"] == 129.99
     assert payload["aggregate_version"] == 1
-    assert payload["model_version"] == MODEL_KEY
+    # задание поставлено, команда лежит в outbox
+    [job] = list(uow.jobs.store.values())
+    assert job.action is IndexAction.FULL_INDEX
+    assert job.content_version == 1
+    assert len(uow.outbox.messages) == 1
+    assert uow.commits == 1
+
+
+async def test_created_does_not_claim_text_is_indexed():
+    """Водяные знаки ставит только тот, кто посчитал векторы (§9.4)."""
+    index = FakeVectorIndex()
+    await _uc(index).handle(_created(1))
+
+    payload = index.payload_of(PID)
+    assert "content_hash" not in payload
+    assert "model_version" not in payload
 
 
 async def test_created_stale_skipped():
-    index, embedder = FakeVectorIndex(), FakeEmbeddingModel()
+    index, uow = FakeVectorIndex(), FakeUnitOfWork()
     index.preload(PID, _wm_payload(5))
-    action = await _uc(index, embedder).handle(_created(4))
+    action = await _uc(index, uow).handle(_created(4))
     assert action is IndexingAction.SKIP
-    assert embedder.calls == 0
-    assert index.upserts == []
+    assert index.payload_upserts == []
+    assert uow.jobs.store == {}
 
 
 # --- content_changed ---
-async def test_content_reembeds():
-    index, embedder = FakeVectorIndex(), FakeEmbeddingModel()
+async def test_content_requests_reembedding():
+    index, uow = FakeVectorIndex(), FakeUnitOfWork()
     index.preload(PID, _wm_payload(5, content_hash=_hash()))
-    action = await _uc(index, embedder).handle(_content(6, name="Наушники Pro"))
+    action = await _uc(index, uow).handle(_content(6, name="Наушники Pro"))
+
     assert action is IndexingAction.REEMBED
-    assert embedder.calls == 1
-    assert index.vector_updates == [PID]
+    assert index.vector_updates == []  # векторы посчитает embedding-service
     payload = index.payload_of(PID)
     assert payload["name"] == "Наушники Pro"
     assert payload["aggregate_version"] == 6
+    [job] = list(uow.jobs.store.values())
+    assert job.action is IndexAction.REEMBED
+    assert job.content_version == 6
+    assert job.content_hash == ContentHash.of(
+        compose(
+            name="Наушники Pro",
+            brand="AudioMax",
+            category="Электроника",
+            description="Беспроводные",
+        ).value
+    )
+    assert len(uow.outbox.messages) == 1
+
+
+async def test_content_redelivery_does_not_duplicate_job():
+    index, uow = FakeVectorIndex(), FakeUnitOfWork()
+    index.preload(PID, _wm_payload(5, content_hash=_hash()))
+    use_case = _uc(index, uow)
+
+    await use_case.handle(_content(6, name="Наушники Pro"))
+    await use_case.handle(_content(6, name="Наушники Pro"))
+
+    assert len(uow.jobs.store) == 1
+    assert len(uow.outbox.messages) == 1
 
 
 async def test_content_unchanged_text_skips_reembed():
-    index, embedder = FakeVectorIndex(), FakeEmbeddingModel()
+    index, uow = FakeVectorIndex(), FakeUnitOfWork()
     index.preload(PID, _wm_payload(5, content_hash=_hash()))
-    action = await _uc(index, embedder).handle(_content(6))
+    action = await _uc(index, uow).handle(_content(6))
+
     assert action is IndexingAction.PAYLOAD_ONLY
-    assert embedder.calls == 0
-    assert index.vector_updates == []
+    assert uow.jobs.store == {}
+    assert uow.outbox.messages == []
     assert index.payload_of(PID)["aggregate_version"] == 6
+    # дедуп не должен сбивать уже стоящие водяные знаки
+    assert index.payload_of(PID)["content_hash"] == _hash()
+    assert index.payload_of(PID)["model_version"] == MODEL_KEY
 
 
 async def test_content_missing_point_repairs():
-    index, embedder = FakeVectorIndex(), FakeEmbeddingModel()
+    index, uow = FakeVectorIndex(), FakeUnitOfWork()
     catalog = FakeCatalogGateway([_snapshot(7)])
-    action = await _uc(index, embedder, catalog).handle(_content(7))
+    action = await _uc(index, uow, catalog).handle(_content(7))
+
     assert action is IndexingAction.REPAIR
-    assert len(index.upserts) == 1
-    assert embedder.calls == 1
+    assert len(index.payload_upserts) == 1
+    assert len(uow.jobs.store) == 1
 
 
 async def test_repair_missing_in_catalog_raises():
@@ -202,14 +266,14 @@ async def test_repair_missing_in_catalog_raises():
 
 
 # --- commercial_data_changed ---
-async def test_commercial_payload_only_no_embed():
-    index, embedder = FakeVectorIndex(), FakeEmbeddingModel()
+async def test_commercial_payload_only_no_job():
+    index, uow = FakeVectorIndex(), FakeUnitOfWork()
     index.preload(PID, _wm_payload(5))
-    action = await _uc(index, embedder).handle(
+    action = await _uc(index, uow).handle(
         _commercial(6, price="119.99", stock=0)
     )
     assert action is IndexingAction.PAYLOAD_ONLY
-    assert embedder.calls == 0
+    assert uow.jobs.store == {}
     assert index.vector_updates == []
     payload = index.payload_of(PID)
     assert payload["price"] == 119.99
@@ -229,7 +293,7 @@ async def test_commercial_missing_point_repairs():
     catalog = FakeCatalogGateway([_snapshot(6)])
     action = await _uc(index, catalog=catalog).handle(_commercial(6))
     assert action is IndexingAction.REPAIR
-    assert len(index.upserts) == 1
+    assert len(index.payload_upserts) == 1
 
 
 # --- deleted ---
@@ -249,25 +313,36 @@ async def test_deleted_missing_point_skipped():
 
 
 async def test_late_content_after_tombstone_skipped():
-    index, embedder = FakeVectorIndex(), FakeEmbeddingModel()
+    index, uow = FakeVectorIndex(), FakeUnitOfWork()
     index.preload(PID, {**_wm_payload(8), "is_deleted": True})
-    action = await _uc(index, embedder).handle(_content(7))
+    action = await _uc(index, uow).handle(_content(7))
     assert action is IndexingAction.SKIP
-    assert embedder.calls == 0
+    assert uow.jobs.store == {}
 
 
 # --- сиблинги одной версии (§6.2): merge без потерь ---
 async def test_same_version_siblings_merge():
-    index, embedder = FakeVectorIndex(), FakeEmbeddingModel()
+    index, uow = FakeVectorIndex(), FakeUnitOfWork()
     index.preload(PID, _wm_payload(5, content_hash=_hash()))
-    uc = _uc(index, embedder)
+    uc = _uc(index, uow)
     await uc.handle(_commercial(6, price="119.99", stock=10))
     await uc.handle(_content(6, name="Наушники Pro"))
     payload = index.payload_of(PID)
     assert payload["price"] == 119.99
     assert payload["name"] == "Наушники Pro"
     assert payload["aggregate_version"] == 6
-    assert index.vector_updates == [PID]
+    assert len(uow.jobs.store) == 1
+
+
+async def test_pinned_model_drift_forces_reembed():
+    """Закреплённая модель разошлась с точкой → пересчёт (§6.2)."""
+    index, uow = FakeVectorIndex(), FakeUnitOfWork()
+    index.preload(PID, _wm_payload(5, content_hash=_hash()))
+    action = await _uc(index, uow, expected_model="другая-модель").handle(
+        _content(6)
+    )
+    assert action is IndexingAction.REEMBED
+    assert len(uow.jobs.store) == 1
 
 
 # --- poison ---
