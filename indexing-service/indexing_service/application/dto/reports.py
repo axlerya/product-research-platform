@@ -65,6 +65,9 @@ class SwapReport:
         done: Завершено успешно.
         failed: Завершено с отказом.
         pending: Ещё в работе.
+        indexed: Товаров эпохи, реально получивших векторы в целевой
+            коллекции. Меньше ``done`` — значит результаты до коллекции не
+            дошли, и alias переключать нельзя.
     """
 
     swapped: bool = False
@@ -72,3 +75,4 @@ class SwapReport:
     done: int = 0
     failed: int = 0
     pending: int = 0
+    indexed: int = 0

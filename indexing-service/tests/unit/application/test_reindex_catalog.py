@@ -76,8 +76,9 @@ async def test_execute_provisions_and_queues_jobs():
     assert admin.provisioned == [TARGET]
     # alias не трогаем: эпоха ещё не посчитана
     assert admin.swaps == []
-    # карточки товаров легли в новую коллекцию, векторов в них нет
-    assert len(admin.index.payload_upserts) == 2
+    # карточки товаров легли в НОВУЮ коллекцию, а не в живой alias
+    assert len(admin.writer(TARGET).payload_upserts) == 2
+    assert admin.index.payload_upserts == []
     # на каждый товар — задание своей эпохи и команда в outbox
     assert len(uow.jobs.store) == 2
     assert all(
@@ -120,12 +121,51 @@ async def test_swap_happens_when_all_jobs_done():
     reindex = _reindex(admin, uow, catalog)
     await reindex.execute(target_collection=TARGET)
     await _finish_all(uow, JobStatus.DONE)
+    admin.ready_roots[TARGET] = 2  # векторы эпохи действительно на месте
 
     report = await reindex.swap(target_collection=TARGET, alias="products")
 
     assert report.swapped is True
     assert report.done == 2
+    assert report.indexed == 2
     assert admin.swaps == [("products", TARGET)]
+
+
+async def test_swap_blocked_when_target_collection_has_no_vectors():
+    """Задания закрыты, но в целевой коллекции векторов нет → не свапаем.
+
+    Ровно этот случай ловит баг маршрутизации: результаты эпохи ушли бы в
+    живой alias, а alias переключился бы на коллекцию без векторов.
+    """
+    admin, uow = FakeVectorIndexAdmin(), FakeUnitOfWork()
+    catalog = FakeCatalogGateway([_snapshot(1), _snapshot(2)])
+    reindex = _reindex(admin, uow, catalog)
+    await reindex.execute(target_collection=TARGET)
+    await _finish_all(uow, JobStatus.DONE)
+    admin.ready_roots[TARGET] = 0
+
+    report = await reindex.swap(target_collection=TARGET, alias="products")
+
+    assert report.swapped is False
+    assert report.done == 2
+    assert report.indexed == 0
+    assert admin.swaps == []
+
+
+async def test_swap_blocked_when_vectors_lag_behind_done_jobs():
+    """Частично долетевшая эпоха тоже не пускается в alias."""
+    admin, uow = FakeVectorIndexAdmin(), FakeUnitOfWork()
+    catalog = FakeCatalogGateway([_snapshot(1), _snapshot(2)])
+    reindex = _reindex(admin, uow, catalog)
+    await reindex.execute(target_collection=TARGET)
+    await _finish_all(uow, JobStatus.DONE)
+    admin.ready_roots[TARGET] = 1
+
+    report = await reindex.swap(target_collection=TARGET, alias="products")
+
+    assert report.swapped is False
+    assert report.indexed == 1
+    assert admin.swaps == []
 
 
 async def test_threshold_allows_swap_with_stragglers():
@@ -137,6 +177,7 @@ async def test_threshold_allows_swap_with_stragglers():
     jobs = list(uow.jobs.store.values())
     await _set_status(uow, jobs[:3], JobStatus.DONE)
     await _set_status(uow, jobs[3:], JobStatus.FAILED)
+    admin.ready_roots[TARGET] = 3
 
     strict = await reindex.swap(target_collection=TARGET, alias="products")
     lenient = await reindex.swap(

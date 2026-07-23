@@ -20,7 +20,9 @@ from indexing_service.infrastructure.qdrant.embedding_sink import (
 pytestmark = pytest.mark.integration
 
 
-def _write(point_id: str, *, content_version: int) -> ChunkWrite:
+def _write(
+    point_id: str, *, content_version: int, collection: str | None = None
+) -> ChunkWrite:
     return ChunkWrite(
         point_id=point_id,
         product_id=uuid4(),
@@ -33,15 +35,22 @@ def _write(point_id: str, *, content_version: int) -> ChunkWrite:
         dense=(0.1, 0.2, 0.3, 0.4),
         sparse=SparseData(indices=(1, 3), values=(0.5, 0.2)),
         token_count=11,
+        collection=collection,
     )
 
 
-async def _sink(qdrant_client):
-    collection = f"chunks_it_{uuid4().hex[:8]}"
+async def _provision(qdrant_client, prefix: str = "chunks_it") -> str:
+    collection = f"{prefix}_{uuid4().hex[:8]}"
     await CollectionProvisioner(
         qdrant_client, collection=collection, dim=4
     ).ensure()
-    return QdrantEmbeddingSink(qdrant_client, collection=collection), collection
+    return collection
+
+
+async def _sink(qdrant_client):
+    collection = await _provision(qdrant_client)
+    sink = QdrantEmbeddingSink(qdrant_client, default_collection=collection)
+    return sink, collection
 
 
 async def _payload(qdrant_client, collection, point_id):
@@ -124,3 +133,70 @@ async def test_merge_keeps_commercial_payload(qdrant_client):
     assert record.payload["name"] == "Кружка"
     assert record.payload["content_version"] == 4
     assert "dense" in record.vector
+
+
+# --- Маршрутизация записи по коллекции эпохи reindex ---
+
+
+async def test_reindex_write_lands_in_target_not_in_alias(qdrant_client):
+    """Результат эпохи пишется в целевую коллекцию, живой alias не тронут."""
+    alias_collection = await _provision(qdrant_client, "alias_it")
+    target = await _provision(qdrant_client, "epoch_it")
+    sink = QdrantEmbeddingSink(
+        qdrant_client, default_collection=alias_collection
+    )
+    point_id = str(uuid4())
+
+    applied = await sink.apply_chunk(
+        _write(point_id, content_version=5, collection=target)
+    )
+
+    assert applied is True
+    written = await _payload(qdrant_client, target, point_id)
+    assert written.payload["content_version"] == 5
+    assert "dense" in written.vector
+    # в живом alias точки не появилось
+    assert (
+        await qdrant_client.retrieve(
+            collection_name=alias_collection, ids=[point_id]
+        )
+        == []
+    )
+
+
+async def test_reindex_write_stamps_epoch_marker(qdrant_client):
+    """Метка эпохи ложится в payload вместе с векторами (гейт свапа)."""
+    target = await _provision(qdrant_client, "epoch_it")
+    sink = QdrantEmbeddingSink(
+        qdrant_client, default_collection=await _provision(qdrant_client)
+    )
+    point_id = str(uuid4())
+
+    await sink.apply_chunk(
+        _write(point_id, content_version=5, collection=target)
+    )
+
+    record = await _payload(qdrant_client, target, point_id)
+    assert record.payload["reindex_epoch"] == target
+
+
+async def test_guard_compares_versions_within_target_collection(
+    qdrant_client,
+):
+    """Свежая версия в alias не мешает записать эпоху в новую коллекцию."""
+    alias_collection = await _provision(qdrant_client, "alias_it")
+    target = await _provision(qdrant_client, "epoch_it")
+    sink = QdrantEmbeddingSink(
+        qdrant_client, default_collection=alias_collection
+    )
+    point_id = str(uuid4())
+    # В alias уже лежит более свежая версия того же чанка.
+    await sink.apply_chunk(_write(point_id, content_version=9))
+
+    applied = await sink.apply_chunk(
+        _write(point_id, content_version=5, collection=target)
+    )
+
+    assert applied is True
+    record = await _payload(qdrant_client, target, point_id)
+    assert record.payload["content_version"] == 5

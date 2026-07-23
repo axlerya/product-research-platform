@@ -351,3 +351,60 @@ async def test_negative_stock_is_poison():
     index.preload(PID, _wm_payload(5))
     with pytest.raises(EventValidationError):
         await _uc(index).handle(_commercial(6, stock=-1))
+
+
+# --- многочанковый товар: payload обязан лечь на ВСЕ точки ---
+
+
+def _preload_multichunk(index, version: int, **root) -> None:
+    """Корневая точка + две чанк-точки того же товара (после rechunk)."""
+    index.preload(
+        PID, {**_wm_payload(version, **root), "product_id": str(_UUID)}
+    )
+    for chunk_ix in (1, 2):
+        index.preload_chunk(PID, chunk_ix, _wm_payload(version))
+
+
+async def test_commercial_update_reaches_every_chunk():
+    """Цена и наличие обязаны совпадать на всех чанках товара.
+
+    Иначе фильтр по цене/остатку отсечёт чанки > 0, и товар потеряет часть
+    своих векторов в выдаче.
+    """
+    index, uow = FakeVectorIndex(), FakeUnitOfWork()
+    _preload_multichunk(index, 5)
+
+    await _uc(index, uow).handle(_commercial(6, price="119.99", stock=0))
+
+    chunks = index.chunk_payloads(PID)
+    assert len(chunks) == 2
+    for payload in (index.payload_of(PID), *chunks):
+        assert payload["price"] == 119.99
+        assert payload["in_stock"] is False
+        assert payload["aggregate_version"] == 6
+
+
+async def test_delete_tombstones_every_chunk():
+    """Удаление товара обязано снять с поиска все его точки."""
+    index = FakeVectorIndex()
+    _preload_multichunk(index, 5)
+
+    await _uc(index).handle(_deleted(6))
+
+    chunks = index.chunk_payloads(PID)
+    assert len(chunks) == 2
+    for payload in (index.payload_of(PID), *chunks):
+        assert payload["is_deleted"] is True
+        assert payload["aggregate_version"] == 6
+
+
+async def test_content_fields_reach_every_chunk():
+    """Текстовые поля и рейтинг тоже разъезжаются по всем точкам."""
+    index, uow = FakeVectorIndex(), FakeUnitOfWork()
+    _preload_multichunk(index, 5, content_hash=_hash())
+
+    await _uc(index, uow).handle(_content(6, name="Наушники Pro"))
+
+    for payload in (index.payload_of(PID), *index.chunk_payloads(PID)):
+        assert payload["name"] == "Наушники Pro"
+        assert payload["aggregate_version"] == 6

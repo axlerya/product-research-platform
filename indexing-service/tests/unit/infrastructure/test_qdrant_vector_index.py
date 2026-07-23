@@ -83,13 +83,26 @@ async def test_upsert_sends_point_struct():
     assert kw["points"][0].id == str(PID.value)
 
 
-async def test_set_payload_targets_point_id():
+async def test_set_payload_targets_every_point_of_product():
+    """Коммерческие поля и tombstone обязаны лечь на ВСЕ чанки товара.
+
+    Адресация списком id накрыла бы только корневую точку, и чанки
+    остались бы со старой ценой и без ``is_deleted``.
+    """
     client = FakeClient()
     await _index(client).set_payload(PID, {"price": 9.9})
     op, kw = client.calls[0]
     assert op == "set_payload"
     assert kw["payload"] == {"price": 9.9}
-    assert kw["points"] == [str(PID.value)]
+    matched = kw["points"].should
+    # чанки — по полю product_id
+    assert any(
+        getattr(c, "key", None) == "product_id"
+        and c.match.value == str(PID.value)
+        for c in matched
+    )
+    # корневая точка — по id: её payload может не нести product_id
+    assert any(getattr(c, "has_id", None) == [str(PID.value)] for c in matched)
 
 
 async def test_update_vectors_sends_named_vectors():
@@ -141,3 +154,25 @@ async def test_scroll_watermarks_paginates():
     assert len(entries) == 2
     assert entries[0].watermark.aggregate_version == 1
     assert entries[1].is_deleted is True
+
+
+async def test_scroll_watermarks_asks_qdrant_for_root_points_only():
+    """Чанк-точки — не товары: reconkile не должен их даже видеть.
+
+    Фильтр «``chunk_ix`` отсутствует или 0», а не «== 0»: синхронный путь
+    ``chunk_ix`` не пишет вовсе, и строгое равенство спрятало бы от сверки
+    именно те товары, которым ещё не посчитали векторы.
+    """
+
+    class ScrollClient(FakeClient):
+        async def scroll(self, **kw):
+            self.calls.append(("scroll", kw))
+            return ([], None)
+
+    client = ScrollClient()
+    [e async for e in _index(client).scroll_watermarks()]
+
+    _, kw = client.calls[0]
+    condition = kw["scroll_filter"].must_not[0]
+    assert condition.key == "chunk_ix"
+    assert condition.range.gt == 0

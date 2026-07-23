@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 from qdrant_client import models
 
+from indexing_service.application.chunk_identity import chunk_point_id
 from indexing_service.application.dto.point import PointRecord
 from indexing_service.domain.value_objects.dense_vector import DenseVector
 from indexing_service.domain.value_objects.embedding import Embedding
@@ -16,6 +17,7 @@ from indexing_service.domain.value_objects.sparse_vector import SparseVector
 from indexing_service.infrastructure.qdrant.collection_provisioner import (
     CollectionProvisioner,
 )
+from indexing_service.infrastructure.qdrant.index_admin import QdrantIndexAdmin
 from indexing_service.infrastructure.qdrant.vector_index import (
     QdrantVectorIndex,
 )
@@ -78,6 +80,160 @@ async def test_upsert_watermark_and_set_payload_preserves_vectors(
     entries = [e async for e in index.scroll_watermarks()]
     assert len(entries) == 1
     assert entries[0].product_id == pid
+
+
+async def _multichunk(qdrant_client, collection, pid, *, chunks: int) -> None:
+    """Кладёт корневую точку товара и ``chunks`` чанк-точек к ней."""
+    index = QdrantVectorIndex(qdrant_client, collection=collection)
+    await index.upsert_document(
+        PointRecord(
+            product_id=pid,
+            embedding=_embedding(),
+            payload={**_payload(), "product_id": str(pid.value)},
+        )
+    )
+    await qdrant_client.upsert(
+        collection_name=collection,
+        points=[
+            models.PointStruct(
+                id=chunk_point_id(pid.value, chunk_ix),
+                vector={
+                    "dense": [0.1, 0.2, 0.3, 0.4],
+                    "sparse": models.SparseVector(
+                        indices=[1, 3], values=[0.5, 0.2]
+                    ),
+                },
+                payload={
+                    **_payload(),
+                    "product_id": str(pid.value),
+                    "chunk_ix": chunk_ix,
+                },
+            )
+            for chunk_ix in range(1, chunks + 1)
+        ],
+    )
+
+
+async def test_scroll_watermarks_skips_chunk_points(qdrant_client):
+    """Сверка обязана видеть товар один раз, а не по разу на чанк.
+
+    Пока чанк-точки попадали в скан, reconcile принимал их за сирот и
+    хоронил: товар терял из поиска всё, кроме нулевого чанка.
+    """
+    collection = f"chunks_scan_{uuid4().hex[:8]}"
+    await CollectionProvisioner(
+        qdrant_client, collection=collection, dim=4
+    ).ensure()
+    pid = ProductId.new()
+    await _multichunk(qdrant_client, collection, pid, chunks=2)
+    index = QdrantVectorIndex(qdrant_client, collection=collection)
+
+    entries = [e async for e in index.scroll_watermarks()]
+
+    assert len(entries) == 1
+    assert entries[0].product_id == pid
+
+
+async def test_set_payload_updates_every_point_of_product(qdrant_client):
+    """Цена, наличие и tombstone обязаны лечь на все точки товара."""
+    collection = f"chunks_pay_{uuid4().hex[:8]}"
+    await CollectionProvisioner(
+        qdrant_client, collection=collection, dim=4
+    ).ensure()
+    pid = ProductId.new()
+    await _multichunk(qdrant_client, collection, pid, chunks=2)
+    index = QdrantVectorIndex(qdrant_client, collection=collection)
+
+    await index.set_payload(
+        pid, {"price": 19.99, "in_stock": False, "is_deleted": True}
+    )
+
+    records, _ = await qdrant_client.scroll(
+        collection_name=collection, limit=10, with_payload=True
+    )
+    assert len(records) == 3
+    for record in records:
+        assert record.payload["price"] == 19.99
+        assert record.payload["in_stock"] is False
+        assert record.payload["is_deleted"] is True
+
+
+async def test_count_ready_roots_ignores_chunks_and_unfinished(qdrant_client):
+    """Гейт свапа считает только готовые корневые точки эпохи."""
+    collection = f"epoch_cnt_{uuid4().hex[:8]}"
+    admin = QdrantIndexAdmin(qdrant_client, dim=4)
+    await admin.provision(collection)
+    ready_root = ProductId.new()
+    no_vectors = ProductId.new()
+    await qdrant_client.upsert(
+        collection_name=collection,
+        points=[
+            # готовая корневая точка эпохи
+            models.PointStruct(
+                id=str(ready_root.value),
+                vector={"dense": [0.1, 0.2, 0.3, 0.4]},
+                payload={
+                    "product_id": str(ready_root.value),
+                    "content_version": 1,
+                    "model_version": "m",
+                    "reindex_epoch": collection,
+                },
+            ),
+            # чанк той же эпохи — за товар не считается
+            models.PointStruct(
+                id=chunk_point_id(ready_root.value, 1),
+                vector={"dense": [0.1, 0.2, 0.3, 0.4]},
+                payload={
+                    "product_id": str(ready_root.value),
+                    "chunk_ix": 1,
+                    "content_version": 1,
+                    "model_version": "m",
+                    "reindex_epoch": collection,
+                },
+            ),
+            # карточка без векторов: метки эпохи и модели нет
+            models.PointStruct(
+                id=str(no_vectors.value),
+                vector={},
+                payload={"product_id": str(no_vectors.value), "price": 1.0},
+            ),
+        ],
+    )
+
+    total = await admin.count_ready_roots(
+        collection, epoch=collection, expected_model="m"
+    )
+
+    assert total == 1
+
+
+async def test_count_ready_roots_ignores_other_epoch(qdrant_client):
+    """Точки прошлой эпохи не засчитываются в готовность новой."""
+    collection = f"epoch_old_{uuid4().hex[:8]}"
+    admin = QdrantIndexAdmin(qdrant_client, dim=4)
+    await admin.provision(collection)
+    pid = ProductId.new()
+    await qdrant_client.upsert(
+        collection_name=collection,
+        points=[
+            models.PointStruct(
+                id=str(pid.value),
+                vector={"dense": [0.1, 0.2, 0.3, 0.4]},
+                payload={
+                    "product_id": str(pid.value),
+                    "content_version": 1,
+                    "model_version": "m",
+                    "reindex_epoch": "products_v1",
+                },
+            )
+        ],
+    )
+
+    total = await admin.count_ready_roots(
+        collection, epoch=collection, expected_model="m"
+    )
+
+    assert total == 0
 
 
 async def test_alias_swap_and_hybrid_query(qdrant_client):

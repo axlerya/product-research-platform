@@ -86,12 +86,14 @@ async def _reindex(target: str) -> None:
 
 
 async def _reindex_swap(target: str, min_ready: float) -> None:
-    deps = await build_batch(get_settings())
+    settings = get_settings()
+    deps = await build_batch(settings)
     try:
         report = await deps.reindex.swap(
             target_collection=target,
             alias=deps.alias,
             min_ready=min_ready,
+            expected_model=settings.expected_model,
         )
         typer.echo(str(report))
         if not report.swapped:

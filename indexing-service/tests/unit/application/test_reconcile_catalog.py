@@ -162,3 +162,81 @@ async def test_orphan_tombstoned():
     assert report.tombstoned == 1
     assert index.payload_of(ProductId(UUID(int=9)))["is_deleted"] is True
     assert uow.jobs.store == {}
+
+
+# --- Многочанковый товар: чанки — не самостоятельные товары ---
+
+
+def _preload_multichunk(index, product_id: ProductId, version: int) -> None:
+    """Товар с корневой точкой и двумя чанк-точками (после rechunk)."""
+    index.preload(
+        product_id,
+        {**_wm(version, _hash()), "product_id": str(product_id.value)},
+    )
+    for chunk_ix in (1, 2):
+        index.preload_chunk(product_id, chunk_ix, _wm(version, _hash()))
+
+
+async def test_multichunk_product_counts_as_one_product():
+    """Три точки одного товара — один matched, а не три."""
+    index, uow = FakeVectorIndex(), FakeUnitOfWork()
+    pid = ProductId(UUID(int=1))
+    _preload_multichunk(index, pid, 5)
+
+    report = await _reconcile(
+        index, uow, FakeCatalogGateway([_snapshot(1, 5)])
+    ).execute()
+
+    assert report.matched == 1
+    assert report.tombstoned == 0
+
+
+async def test_chunks_are_never_tombstoned():
+    """Чанк-точка не значится в каталоге, но она и не товар — не хоронить.
+
+    Именно здесь ломался reconcile: чанки уезжали в tombstone и товар
+    терял из поиска всё, кроме нулевого чанка.
+    """
+    index, uow = FakeVectorIndex(), FakeUnitOfWork()
+    pid = ProductId(UUID(int=1))
+    _preload_multichunk(index, pid, 5)
+
+    report = await _reconcile(
+        index, uow, FakeCatalogGateway([_snapshot(1, 5)])
+    ).execute()
+
+    assert report.tombstoned == 0
+    for payload in index.chunk_payloads(pid):
+        assert payload.get("is_deleted", False) is False
+
+
+async def test_orphan_detected_by_root_point_and_tombstones_all_chunks():
+    """Сирота определяется по корневой точке, а хоронится целиком."""
+    index, uow = FakeVectorIndex(), FakeUnitOfWork()
+    pid = ProductId(UUID(int=9))
+    _preload_multichunk(index, pid, 3)
+
+    report = await _reconcile(index, uow, FakeCatalogGateway([])).execute()
+
+    assert report.tombstoned == 1  # один товар, а не три точки
+    assert index.payload_of(pid)["is_deleted"] is True
+    chunks = index.chunk_payloads(pid)
+    assert len(chunks) == 2
+    assert all(payload["is_deleted"] is True for payload in chunks)
+
+
+async def test_reconcile_is_idempotent_on_rerun():
+    """Повторный прогон ничего не меняет и не хоронит повторно."""
+    index, uow = FakeVectorIndex(), FakeUnitOfWork()
+    pid = ProductId(UUID(int=1))
+    _preload_multichunk(index, pid, 5)
+    catalog = FakeCatalogGateway([_snapshot(1, 5)])
+    reconcile = _reconcile(index, uow, catalog)
+
+    first = await reconcile.execute()
+    second = await reconcile.execute()
+
+    assert first == second
+    assert second.matched == 1
+    assert second.tombstoned == 0
+    assert uow.jobs.store == {}

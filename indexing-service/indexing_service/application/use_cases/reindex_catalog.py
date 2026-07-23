@@ -10,6 +10,8 @@ embedding-service, результаты ``ApplyEmbeddingResult`` пишет ср
 эпоха готова (Q6), а это происходит сильно позже постановки заданий.
 """
 
+from dataclasses import replace
+
 from indexing_service.application.document_builder import to_product_document
 from indexing_service.application.dto.embedding_job import EmbeddingJobRequest
 from indexing_service.application.dto.reports import ReindexReport, SwapReport
@@ -76,13 +78,20 @@ class ReindexCatalog:
         target_collection: str,
         alias: str,
         min_ready: float = 1.0,
+        expected_model: str | None = None,
     ) -> SwapReport:
         """Переключает alias, если эпоха готова (Q6).
+
+        Готовность проверяется дважды: по состоянию заданий (наша сторона) и
+        по фактическому содержимому целевой коллекции. Одних заданий мало —
+        job закрывается по факту применения результата, а долетел ли он до
+        нужной коллекции, знает только сам Qdrant.
 
         Args:
             target_collection: Коллекция эпохи.
             alias: Публичный alias поиска.
             min_ready: Требуемая доля завершённых заданий (1.0 — все).
+            expected_model: Закреплённая модель или ``None``.
 
         Returns:
             Отчёт с прогрессом эпохи и признаком, переключён ли alias.
@@ -103,14 +112,18 @@ class ReindexCatalog:
             return report  # эпохи нет — переключать не на что
         if done / total < min_ready:
             return report
-        await self._admin.swap_alias(alias, target_collection)
-        return SwapReport(
-            swapped=True,
-            total=report.total,
-            done=report.done,
-            failed=report.failed,
-            pending=report.pending,
+        indexed = await self._admin.count_ready_roots(
+            target_collection,
+            epoch=target_collection,
+            expected_model=expected_model,
         )
+        report = replace(report, indexed=indexed)
+        if indexed < done:
+            # Задания закрыты, а векторов в коллекции нет: alias отдал бы
+            # поиску пустую коллекцию. Не переключаем.
+            return report
+        await self._admin.swap_alias(alias, target_collection)
+        return replace(report, swapped=True)
 
     async def _queue_one(
         self, snapshot, writer, target_collection: str

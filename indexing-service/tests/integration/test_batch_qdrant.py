@@ -12,6 +12,8 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy import text
 
+from indexing_service.application.chunk_identity import chunk_point_id
+from indexing_service.application.dto.chunk_write import ChunkWrite
 from indexing_service.application.dto.snapshot import ProductSnapshot
 from indexing_service.application.use_cases.reconcile_catalog import (
     ReconcileCatalog,
@@ -27,6 +29,9 @@ from indexing_service.domain.value_objects.identifiers import ProductId
 from indexing_service.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
 from indexing_service.infrastructure.qdrant.collection_provisioner import (
     CollectionProvisioner,
+)
+from indexing_service.infrastructure.qdrant.embedding_sink import (
+    QdrantEmbeddingSink,
 )
 from indexing_service.infrastructure.qdrant.index_admin import QdrantIndexAdmin
 from indexing_service.infrastructure.qdrant.vector_index import (
@@ -89,6 +94,33 @@ async def _finish_epoch(sessionmaker_, target: str) -> None:
         await session.commit()
 
 
+async def _apply_epoch_vectors(qdrant_client, target: str, seqs) -> None:
+    """Имитирует применённые результаты эпохи: векторы + метки в целевой.
+
+    Пишем ровно то, что ставит ``QdrantEmbeddingSink`` при
+    ``ChunkWrite.collection == target`` — по этим меткам гейт свапа и
+    отличает готовую коллекцию от коллекции с одними карточками.
+    """
+    sink = QdrantEmbeddingSink(qdrant_client, default_collection="unused")
+    for seq in seqs:
+        await sink.apply_chunk(
+            ChunkWrite(
+                point_id=str(UUID(int=seq)),
+                product_id=UUID(int=seq),
+                sku=f"PROD-{seq:03d}",
+                chunk_ix=0,
+                content_version=99,
+                aggregate_version=99,
+                content_hash="a" * 64,
+                model_version="it-model",
+                dense=tuple(0.1 for _ in range(_DIM)),
+                sparse=None,
+                token_count=3,
+                collection=target,
+            )
+        )
+
+
 async def test_reindex_fills_target_and_queues_epoch(
     qdrant_client, sessionmaker_
 ):
@@ -121,9 +153,19 @@ async def test_reindex_fills_target_and_queues_epoch(
     assert swap.swapped is False
     assert swap.pending == 2
 
+    # Задания закрыты, но векторов в коллекции ещё нет: одних карточек мало,
+    # иначе alias уехал бы на коллекцию без единого вектора.
     await _finish_epoch(sessionmaker_, target)
     swap = await reindex.swap(target_collection=target, alias=alias)
+    assert swap.swapped is False
+    assert swap.done == 2
+    assert swap.indexed == 0
+
+    # Результаты эпохи долетели до целевой коллекции → свап разрешён.
+    await _apply_epoch_vectors(qdrant_client, target, (1, 2))
+    swap = await reindex.swap(target_collection=target, alias=alias)
     assert swap.swapped is True
+    assert swap.indexed == 2
     aliased = await qdrant_client.count(collection_name=alias)
     assert aliased.count == 2
 
@@ -162,3 +204,62 @@ async def test_reconcile_queues_missing_and_tombstones_orphan(
     )
     assert fresh[0].payload["is_deleted"] is False
     assert await _scalar(sessionmaker_, "SELECT count(*) FROM outbox") == 1
+
+
+async def test_reconcile_keeps_chunks_of_live_product(
+    qdrant_client, sessionmaker_
+):
+    """Чанки живого товара не считаются сиротами и не хоронятся.
+
+    Раньше скан сверки принимал каждую чанк-точку за отдельный товар,
+    не находил её в каталоге и ставил ``is_deleted`` — товар терял из
+    поиска все чанки, кроме нулевого, и обратно они не возвращались.
+    """
+    collection = f"products_{uuid4().hex[:8]}"
+    await CollectionProvisioner(
+        qdrant_client, collection=collection, dim=_DIM
+    ).ensure()
+    index = QdrantVectorIndex(qdrant_client, collection=collection)
+    product_id = UUID(int=2)  # каталог знает этот товар
+    await index.upsert_payload(
+        ProductId(product_id),
+        {
+            "aggregate_version": 1,
+            "is_deleted": False,
+            "sku": "PROD-002",
+            "product_id": str(product_id),
+        },
+    )
+    await qdrant_client.upsert(
+        collection_name=collection,
+        points=[
+            {
+                "id": chunk_point_id(product_id, chunk_ix),
+                "vector": {},
+                "payload": {
+                    "product_id": str(product_id),
+                    "chunk_ix": chunk_ix,
+                    "aggregate_version": 1,
+                    "content_version": 1,
+                    "model_version": "it-model",
+                },
+            }
+            for chunk_ix in (1, 2)
+        ],
+    )
+
+    report = await ReconcileCatalog(
+        index=index,
+        request_embedding=_request_embedding(sessionmaker_),
+        catalog=FakeCatalogGateway([_snap(2)]),
+        clock=SystemClock(),
+    ).execute()
+
+    assert report.tombstoned == 0
+    for chunk_ix in (1, 2):
+        record = await qdrant_client.retrieve(
+            collection_name=collection,
+            ids=[chunk_point_id(product_id, chunk_ix)],
+            with_payload=True,
+        )
+        assert record[0].payload.get("is_deleted") is not True

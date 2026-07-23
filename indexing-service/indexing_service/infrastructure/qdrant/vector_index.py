@@ -2,6 +2,13 @@
 
 Инфраструктурные сбои Qdrant/сети переводит в ``VectorIndexError``
 (временная ошибка → ретрай, §7.1).
+
+Адресация точек товара (§9.4): у товара одна корневая точка (id == UUID
+товара) и, после rechunk, дополнительные чанк-точки. Чтение водяного знака
+и создание карточки работают с корневой точкой, а ``set_payload`` — со
+**всеми** точками товара: цена, наличие и tombstone обязаны быть
+одинаковыми на всех его векторах. Скан сверки отдаёт только корневые точки:
+чанк — не самостоятельный товар.
 """
 
 from collections.abc import AsyncIterator, Mapping
@@ -19,6 +26,10 @@ from indexing_service.application.exceptions import VectorIndexError
 from indexing_service.domain.value_objects.embedding import Embedding
 from indexing_service.domain.value_objects.identifiers import ProductId
 from indexing_service.domain.value_objects.watermark import IndexingWatermark
+from indexing_service.infrastructure.qdrant.collection_spec import (
+    product_points_filter,
+    root_points_filter,
+)
 from indexing_service.infrastructure.qdrant.mappers import (
     point_id,
     to_named_vectors,
@@ -64,6 +75,7 @@ class QdrantVectorIndex:
             records, offset = await self._guard(
                 self._client.scroll(
                     collection_name=self._collection,
+                    scroll_filter=root_points_filter(),
                     limit=256,
                     offset=offset,
                     with_payload=True,
@@ -125,11 +137,13 @@ class QdrantVectorIndex:
     async def set_payload(
         self, product_id: ProductId, fields: Mapping[str, object]
     ) -> None:
+        # Фильтром по товару, а не списком id: у товара может быть несколько
+        # точек, и коммерческие поля с tombstone обязаны накрыть все.
         await self._guard(
             self._client.set_payload(
                 collection_name=self._collection,
                 payload=dict(fields),
-                points=[point_id(product_id)],
+                points=product_points_filter(str(product_id.value)),
             )
         )
 
