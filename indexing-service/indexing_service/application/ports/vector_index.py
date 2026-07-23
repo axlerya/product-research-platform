@@ -26,6 +26,16 @@ class VectorIndex(Protocol):
         """Пишет полную точку (векторы + payload) — created/repair."""
         ...
 
+    async def upsert_payload(
+        self, product_id: ProductId, fields: Mapping[str, object]
+    ) -> None:
+        """Создаёт или обновляет точку без векторов (фаза A, §9.4).
+
+        В отличие от ``set_payload``, работает и когда точки ещё нет: товар
+        становится виден фильтрам сразу, а векторы домержит async-результат.
+        """
+        ...
+
     async def update_vectors(
         self, product_id: ProductId, embedding: Embedding
     ) -> None:

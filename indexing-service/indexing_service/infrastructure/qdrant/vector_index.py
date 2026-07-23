@@ -91,6 +91,22 @@ class QdrantVectorIndex:
             )
         )
 
+    async def upsert_payload(
+        self, product_id: ProductId, fields: Mapping[str, object]
+    ) -> None:
+        await self._guard(
+            self._client.upsert(
+                collection_name=self._collection,
+                points=[
+                    models.PointStruct(
+                        id=point_id(product_id),
+                        vector={},  # векторы допишет async-результат
+                        payload=dict(fields),
+                    )
+                ],
+            )
+        )
+
     async def update_vectors(
         self, product_id: ProductId, embedding: Embedding
     ) -> None:
