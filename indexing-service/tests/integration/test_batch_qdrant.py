@@ -12,6 +12,7 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy import text
 
+from indexing_service.application.chunk_identity import chunk_point_id
 from indexing_service.application.dto.chunk_write import ChunkWrite
 from indexing_service.application.dto.snapshot import ProductSnapshot
 from indexing_service.application.use_cases.reconcile_catalog import (
@@ -203,3 +204,62 @@ async def test_reconcile_queues_missing_and_tombstones_orphan(
     )
     assert fresh[0].payload["is_deleted"] is False
     assert await _scalar(sessionmaker_, "SELECT count(*) FROM outbox") == 1
+
+
+async def test_reconcile_keeps_chunks_of_live_product(
+    qdrant_client, sessionmaker_
+):
+    """Чанки живого товара не считаются сиротами и не хоронятся.
+
+    Раньше скан сверки принимал каждую чанк-точку за отдельный товар,
+    не находил её в каталоге и ставил ``is_deleted`` — товар терял из
+    поиска все чанки, кроме нулевого, и обратно они не возвращались.
+    """
+    collection = f"products_{uuid4().hex[:8]}"
+    await CollectionProvisioner(
+        qdrant_client, collection=collection, dim=_DIM
+    ).ensure()
+    index = QdrantVectorIndex(qdrant_client, collection=collection)
+    product_id = UUID(int=2)  # каталог знает этот товар
+    await index.upsert_payload(
+        ProductId(product_id),
+        {
+            "aggregate_version": 1,
+            "is_deleted": False,
+            "sku": "PROD-002",
+            "product_id": str(product_id),
+        },
+    )
+    await qdrant_client.upsert(
+        collection_name=collection,
+        points=[
+            {
+                "id": chunk_point_id(product_id, chunk_ix),
+                "vector": {},
+                "payload": {
+                    "product_id": str(product_id),
+                    "chunk_ix": chunk_ix,
+                    "aggregate_version": 1,
+                    "content_version": 1,
+                    "model_version": "it-model",
+                },
+            }
+            for chunk_ix in (1, 2)
+        ],
+    )
+
+    report = await ReconcileCatalog(
+        index=index,
+        request_embedding=_request_embedding(sessionmaker_),
+        catalog=FakeCatalogGateway([_snap(2)]),
+        clock=SystemClock(),
+    ).execute()
+
+    assert report.tombstoned == 0
+    for chunk_ix in (1, 2):
+        record = await qdrant_client.retrieve(
+            collection_name=collection,
+            ids=[chunk_point_id(product_id, chunk_ix)],
+            with_payload=True,
+        )
+        assert record[0].payload.get("is_deleted") is not True
