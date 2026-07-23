@@ -1,5 +1,6 @@
 """Порты хранилища jobs/requests (write-side, в границе UoW)."""
 
+from datetime import datetime
 from typing import Protocol
 
 from indexing_service.domain.entities.embedding_request import EmbeddingRequest
@@ -52,4 +53,10 @@ class EmbeddingRequestRepository(Protocol):
 
     async def update(self, request: EmbeddingRequest) -> None:
         """Обновляет статус/времена команды."""
+        ...
+
+    async def find_stale(
+        self, older_than: datetime, *, limit: int = 100
+    ) -> list[EmbeddingRequest]:
+        """Команды без ответа дольше таймаута (§10)."""
         ...
