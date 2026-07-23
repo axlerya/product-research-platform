@@ -225,6 +225,7 @@ class ApplyEmbeddingResult:
             chunk_ix=chunk.chunk_ix,
             content_version=job.content_version,
             aggregate_version=job.aggregate_version,
+            content_hash=job.content_hash.value,
             model_version=model_version,
             dense=item.dense,
             sparse=item.sparse,

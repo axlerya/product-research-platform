@@ -56,6 +56,22 @@ def full_payload(
     }
 
 
+def pending_payload(
+    document: ProductDocument, *, indexed_at: datetime
+) -> dict[str, object]:
+    """Полный payload товара ДО эмбеддинга (фаза A, §9.4).
+
+    Водяные знаки текста и модели (``content_hash``, ``model_version``) сюда
+    не входят: их пишет только тот, кто реально посчитал векторы. Иначе
+    точка объявила бы текст проиндексированным раньше времени, и дедуп
+    ``classify`` навсегда закрыл бы товару путь к ре-эмбеддингу.
+    """
+    payload = full_payload(document, model_version="", indexed_at=indexed_at)
+    del payload["model_version"]
+    del payload["content_hash"]
+    return payload
+
+
 def content_payload(
     *,
     name: str,
@@ -78,6 +94,35 @@ def content_payload(
         "aggregate_version": aggregate_version,
         "indexed_at": indexed_at.isoformat(),
     }
+
+
+def pending_content_fields(
+    *,
+    name: str,
+    description: str,
+    category: str,
+    brand: str,
+    aggregate_version: int,
+    indexed_at: datetime,
+) -> dict[str, object]:
+    """Контентные поля при постановке ре-эмбеддинга (фаза A, §9.4).
+
+    Как ``content_payload``, но без ``content_hash``/``model_version`` —
+    причина та же, что у ``pending_payload``.
+    """
+    fields = content_payload(
+        name=name,
+        description=description,
+        category=category,
+        brand=brand,
+        content_hash="",
+        model_version="",
+        aggregate_version=aggregate_version,
+        indexed_at=indexed_at,
+    )
+    del fields["content_hash"]
+    del fields["model_version"]
+    return fields
 
 
 def commercial_payload(

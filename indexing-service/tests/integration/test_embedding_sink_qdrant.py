@@ -28,6 +28,7 @@ def _write(point_id: str, *, content_version: int) -> ChunkWrite:
         chunk_ix=0,
         content_version=content_version,
         aggregate_version=2,
+        content_hash="a" * 64,
         model_version="bge-m3@x|dim=4",
         dense=(0.1, 0.2, 0.3, 0.4),
         sparse=SparseData(indices=(1, 3), values=(0.5, 0.2)),

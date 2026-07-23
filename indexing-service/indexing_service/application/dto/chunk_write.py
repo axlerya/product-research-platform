@@ -22,6 +22,7 @@ class ChunkWrite:
         chunk_ix: Порядковый индекс чанка внутри товара.
         content_version: Версия текста, на которой считались векторы (guard).
         aggregate_version: Версия агрегата товара.
+        content_hash: Хэш реально проэмбеженного текста (водяной знак).
         model_version: Ключ модели embedding-service (водяной знак).
         dense: Плотный вектор или ``None``.
         sparse: Разреженный вектор или ``None``.
@@ -34,6 +35,7 @@ class ChunkWrite:
     chunk_ix: int
     content_version: int
     aggregate_version: int
+    content_hash: str
     model_version: str
     dense: tuple[float, ...] | None
     sparse: SparseData | None
