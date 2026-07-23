@@ -181,6 +181,8 @@ def build_result_consumer(settings: Settings) -> ResultConsumerDeps:
         SystemClock(),
         expected_dim=settings.embedding_dim,
         max_item_attempts=settings.max_item_attempts,
+        retry_backoff_s=settings.item_retry_backoff_s,
+        retry_backoff_cap_s=settings.item_retry_backoff_cap_s,
     )
     return ResultConsumerDeps(use_case=use_case, engine=engine, qdrant=qdrant)
 

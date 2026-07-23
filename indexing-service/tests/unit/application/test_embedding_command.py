@@ -93,3 +93,24 @@ def test_message_includes_trace_id_when_given():
     )
     assert message.payload["trace_id"] == "00-abc-def-01"
     assert message.headers == {"trace_id": "00-abc-def-01"}
+
+
+def test_message_is_publishable_immediately_by_default():
+    message = build_command_message(
+        _request(), model=None, message_id=_MESSAGE_ID, occurred_at=_NOW
+    )
+    assert message.next_attempt_at is None
+
+
+def test_message_carries_delayed_publication():
+    due = datetime(2026, 7, 20, 10, 20, tzinfo=UTC)
+    message = build_command_message(
+        _request(),
+        model=None,
+        message_id=_MESSAGE_ID,
+        occurred_at=_NOW,
+        next_attempt_at=due,
+    )
+    # backoff живёт в строке outbox, а не в конверте команды
+    assert message.next_attempt_at == due
+    assert "next_attempt_at" not in message.payload

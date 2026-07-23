@@ -1,6 +1,6 @@
 """Тесты use case ``ApplyEmbeddingResult`` на фейках (§6, §9)."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
@@ -183,13 +183,22 @@ def _result(items, *, dim=3):
     )
 
 
-def _use_case(uow, sink, *, max_item_attempts=5):
+def _use_case(
+    uow,
+    sink,
+    *,
+    max_item_attempts=5,
+    retry_backoff_s=5.0,
+    retry_backoff_cap_s=300.0,
+):
     return ApplyEmbeddingResult(
         uow,
         sink,
         _Clock(),
         expected_dim=3,
         max_item_attempts=max_item_attempts,
+        retry_backoff_s=retry_backoff_s,
+        retry_backoff_cap_s=retry_backoff_cap_s,
     )
 
 
@@ -275,6 +284,50 @@ async def test_inference_failed_enqueues_retry():
     assert uow.outbox.messages[0].event_type == (
         "embedding.documents.requested.v1"
     )
+
+
+async def test_retry_is_delayed_by_backoff():
+    """Первый ретрай откладывается на базовую задержку (§8, §10)."""
+    uow = _FakeUoW(
+        [_job([_chunk(0)])], [_request([RequestItem("c0", "текст")])]
+    )
+    await _use_case(uow, _FakeSink()).handle(
+        _result([_err("c0", EmbeddingErrorCode.INFERENCE_FAILED)])
+    )
+
+    retry = next(r for r in uow.requests.store.values() if r.attempt == 1)
+    assert retry.next_attempt_at == _APPLIED + timedelta(seconds=5)
+    # relay не опубликует команду раньше срока
+    assert uow.outbox.messages[0].next_attempt_at == retry.next_attempt_at
+
+
+async def test_backoff_grows_exponentially():
+    """Каждая следующая попытка ждёт вдвое дольше."""
+    uow = _FakeUoW(
+        [_job([_chunk(0, status=ChunkStatus.RETRYING, attempts=2)])],
+        [_request([RequestItem("c0", "текст")], attempt=2)],
+    )
+    await _use_case(uow, _FakeSink()).handle(
+        _result([_err("c0", EmbeddingErrorCode.INFERENCE_FAILED)])
+    )
+
+    retry = next(r for r in uow.requests.store.values() if r.attempt == 3)
+    # attempt=3 → 5 * 2**2 = 20 c
+    assert retry.next_attempt_at == _APPLIED + timedelta(seconds=20)
+
+
+async def test_backoff_is_capped():
+    """Задержка не растёт выше потолка."""
+    uow = _FakeUoW(
+        [_job([_chunk(0, status=ChunkStatus.RETRYING, attempts=3)])],
+        [_request([RequestItem("c0", "текст")], attempt=3)],
+    )
+    await _use_case(uow, _FakeSink(), retry_backoff_cap_s=12.0).handle(
+        _result([_err("c0", EmbeddingErrorCode.INFERENCE_FAILED)])
+    )
+
+    retry = next(r for r in uow.requests.store.values() if r.attempt == 4)
+    assert retry.next_attempt_at == _APPLIED + timedelta(seconds=12)
 
 
 async def test_inference_failed_exhausted_marks_failed():

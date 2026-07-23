@@ -27,6 +27,7 @@ class SqlAlchemyOutboxRepository:
                     payload=message.payload,
                     headers=message.headers,
                     occurred_at=message.occurred_at,
+                    next_attempt_at=message.next_attempt_at,
                 )
                 for message in messages
             ]
