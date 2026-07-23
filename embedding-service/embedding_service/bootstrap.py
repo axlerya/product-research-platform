@@ -4,6 +4,7 @@
 а не unit-тестами (вне coverage).
 """
 
+import logging
 from dataclasses import dataclass
 
 from prometheus_client import CollectorRegistry
@@ -43,6 +44,8 @@ from embedding_service.infrastructure.services.id_generator import (
     UuidGenerator,
 )
 
+_logger = logging.getLogger(__name__)
+
 
 @dataclass
 class Deps:
@@ -73,6 +76,17 @@ class Deps:
         """Собран ли reranker (включён и провайдер построен)."""
         return self.rerank_documents is not None
 
+    @property
+    def reranker_configured(self) -> bool:
+        """Просил ли оператор reranker (``RERANKER_ENABLED``).
+
+        Отличает «выключен» (RerankerService не регистрируется → Rerank
+        отвечает UNIMPLEMENTED) от «включён, но провайдер не создался»
+        (регистрируется в состоянии NOT_SERVING → Rerank UNAVAILABLE).
+        """
+        settings = self.reranker_settings
+        return settings is not None and settings.enabled
+
     async def aclose(self) -> None:
         await self.provider.aclose()
         if self.reranker_provider is not None:
@@ -97,11 +111,25 @@ def build_deps(
     rerank_documents = None
     reranker_metrics = None
     if reranker_settings is not None and reranker_settings.enabled:
-        reranker_provider = build_reranker_provider(reranker_settings)
-        rerank_documents = RerankDocuments(
-            reranker_provider, reranker_settings.limits()
-        )
-        reranker_metrics = build_reranker_metrics(registry)
+        # Безопасная граница: сбой создания reranker (веса, CUDA, отсутствующий
+        # extra) НЕ должен ронять embedding-сервис — деградируем до «выключен».
+        try:
+            reranker_provider = build_reranker_provider(reranker_settings)
+            rerank_documents = RerankDocuments(
+                reranker_provider, reranker_settings.limits()
+            )
+            reranker_metrics = build_reranker_metrics(registry)
+        except Exception as exc:
+            # Без секретов: тип и текст ошибки, но не настройки/окружение.
+            _logger.warning(
+                "не удалось создать reranker-провайдер (%s: %s); "
+                "сервис продолжает работу без reranker",
+                type(exc).__name__,
+                exc,
+            )
+            reranker_provider = None
+            rerank_documents = None
+            reranker_metrics = None
 
     return Deps(
         settings=settings,
