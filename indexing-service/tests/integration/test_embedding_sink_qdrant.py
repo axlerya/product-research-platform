@@ -97,3 +97,29 @@ async def test_newer_content_version_overwrites(qdrant_client):
     assert await sink.apply_chunk(_write(point_id, content_version=7)) is True
     record = await _payload(qdrant_client, collection, point_id)
     assert record.payload["content_version"] == 7
+
+
+async def test_merge_keeps_commercial_payload(qdrant_client):
+    """Векторы дописываются к точке товара, не снося цену/остаток (§9.4)."""
+    sink, collection = await _sink(qdrant_client)
+    point_id = str(uuid4())
+    # Точку создал синхронный путь: коммерческий payload, векторов нет.
+    await qdrant_client.upsert(
+        collection_name=collection,
+        points=[
+            {
+                "id": point_id,
+                "vector": {},
+                "payload": {"price": 99.9, "stock": 5, "name": "Кружка"},
+            }
+        ],
+    )
+
+    assert await sink.apply_chunk(_write(point_id, content_version=4)) is True
+
+    record = await _payload(qdrant_client, collection, point_id)
+    assert record.payload["price"] == 99.9
+    assert record.payload["stock"] == 5
+    assert record.payload["name"] == "Кружка"
+    assert record.payload["content_version"] == 4
+    assert "dense" in record.vector
