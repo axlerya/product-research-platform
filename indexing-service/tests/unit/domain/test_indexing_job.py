@@ -79,3 +79,40 @@ def test_rejects_duplicate_text_ids():
 def test_rejects_empty_chunk_text_id():
     with pytest.raises(InvalidJobError):
         _chunk(text_id="")
+
+
+def test_rechunk_replaces_in_place_keeping_order():
+    job = _job(
+        chunks=(
+            _chunk(0, "t0", "p0"),
+            _chunk(1, "t1", "p1"),
+            _chunk(2, "t2", "p2"),
+        )
+    )
+
+    rechunked = job.rechunk(
+        "t1", [_chunk(1, "t1a", "p1a"), _chunk(3, "t1b", "p1b")]
+    )
+
+    assert [c.text_id for c in rechunked.chunks] == [
+        "t0",
+        "t1a",
+        "t1b",
+        "t2",
+    ]
+
+
+def test_rechunk_rejects_empty_replacement():
+    with pytest.raises(InvalidJobError):
+        _job().rechunk("t0", [])
+
+
+def test_rechunk_rejects_unknown_text_id():
+    with pytest.raises(InvalidJobError):
+        _job().rechunk("нет-такого", [_chunk(1, "t1", "p1")])
+
+
+def test_rechunk_rejects_duplicate_text_ids():
+    job = _job(chunks=(_chunk(0, "t0", "p0"), _chunk(1, "t1", "p1")))
+    with pytest.raises(InvalidJobError):
+        job.rechunk("t0", [_chunk(0, "t1", "pX")])
