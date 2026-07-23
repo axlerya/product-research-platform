@@ -27,11 +27,18 @@ from embedding_service.presentation.grpc.status_map import to_status_code
 
 
 class RerankerServicer(rpc.RerankerServiceServicer):
-    """Реализация gRPC reranker поверх use case ``RerankDocuments``."""
+    """Реализация gRPC reranker поверх use case ``RerankDocuments``.
+
+    ``rerank_documents`` допускает ``None`` — случай, когда провайдер не
+    создался и сервис зарегистрирован лишь для того, чтобы отвечать
+    ``UNAVAILABLE`` вместо ``UNIMPLEMENTED``. Инвариант: ``is_ready() is True``
+    ⇒ use case присутствует (готовность выставляется только после успешного
+    прогрева), поэтому до ``self._rerank`` запрос доходит только с ним.
+    """
 
     def __init__(
         self,
-        rerank_documents: RerankDocuments,
+        rerank_documents: RerankDocuments | None,
         is_ready: Callable[[], bool],
         *,
         deadline_guard_s: float = 0.005,
