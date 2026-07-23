@@ -175,13 +175,24 @@ class FakeJobRepository:
 
     async def upsert(self, job) -> None:
         self.store[job.job_id] = job
-        self._by_product[(job.product_id, job.content_version)] = job
+        key = (job.product_id, job.content_version, job.target_collection)
+        self._by_product[key] = job
 
     async def get(self, job_id):
         return self.store.get(job_id)
 
-    async def get_by_product(self, product_id, content_version):
-        return self._by_product.get((product_id, content_version))
+    async def get_by_product(
+        self, product_id, content_version, target_collection=None
+    ):
+        key = (product_id, content_version, target_collection)
+        return self._by_product.get(key)
+
+    async def epoch_counts(self, target_collection):
+        counts: dict = {}
+        for job in self.store.values():
+            if job.target_collection == target_collection:
+                counts[job.status] = counts.get(job.status, 0) + 1
+        return counts
 
 
 class FakeRequestRepository:

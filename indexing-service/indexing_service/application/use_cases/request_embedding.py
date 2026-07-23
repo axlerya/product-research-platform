@@ -66,7 +66,9 @@ class RequestEmbedding:
         """
         async with self._uow as uow:
             existing = await uow.jobs.get_by_product(
-                request.product_id, request.content_version
+                request.product_id,
+                request.content_version,
+                request.target_collection,
             )
             if existing is not None:
                 return False

@@ -30,16 +30,13 @@ from indexing_service.domain.services.chunking import SingleDocument
 from indexing_service.infrastructure.catalog.http_client import (
     HttpCatalogClient,
 )
-from indexing_service.infrastructure.config import EmbeddingMode, Settings
+from indexing_service.infrastructure.config import Settings
 from indexing_service.infrastructure.db.engine import (
     build_engine,
     build_sessionmaker,
 )
 from indexing_service.infrastructure.db.unit_of_work import (
     SqlAlchemyUnitOfWork,
-)
-from indexing_service.infrastructure.embedding.deterministic import (
-    DeterministicEmbeddingModel,
 )
 from indexing_service.infrastructure.messaging.broker import (
     RabbitEmbeddingPublisher,
@@ -72,21 +69,6 @@ class ConsumerDeps:
         await self.qdrant.close()
         await self.http.aclose()
         await self.engine.dispose()
-
-
-def _build_embedder(settings: Settings):
-    if settings.embedding_mode is EmbeddingMode.LOCAL:
-        from indexing_service.infrastructure.embedding.bge_m3 import (
-            load_bge_m3,
-        )
-
-        return load_bge_m3(
-            model=settings.embedding_model,
-            revision=settings.embedding_revision,
-            device=settings.embedding_device,
-            dim=settings.embedding_dim,
-        )
-    return DeterministicEmbeddingModel(dim=settings.embedding_dim)
 
 
 async def build_consumer(settings: Settings) -> ConsumerDeps:
@@ -134,10 +116,12 @@ class BatchDeps:
     alias: str
     qdrant: AsyncQdrantClient
     http: httpx.AsyncClient
+    engine: AsyncEngine
 
     async def aclose(self) -> None:
         await self.qdrant.close()
         await self.http.aclose()
+        await self.engine.dispose()
 
 
 @dataclass
@@ -210,14 +194,27 @@ async def build_batch(settings: Settings) -> BatchDeps:
         url=settings.qdrant_url, api_key=settings.qdrant_api_key or None
     )
     http = httpx.AsyncClient(timeout=30.0)
-    embedder = _build_embedder(settings)
+    engine = build_engine(settings)
+    sessionmaker = build_sessionmaker(engine)
     catalog = HttpCatalogClient(http, base_url=settings.catalog_base_url)
     clock = SystemClock()
     physical = f"{settings.collection_alias}_v1"
+
+    def request_embedding() -> RequestEmbedding:
+        # Своя UoW на use case: у каждого своя транзакционная граница.
+        return RequestEmbedding(
+            SqlAlchemyUnitOfWork(sessionmaker),
+            clock,
+            chunker=SingleDocument(),
+            expected_model=settings.expected_model,
+            max_texts=settings.max_texts,
+        )
+
     return BatchDeps(
         reindex=ReindexCatalog(
             admin=QdrantIndexAdmin(qdrant, dim=settings.embedding_dim),
-            embedder=embedder,
+            request_embedding=request_embedding(),
+            uow=SqlAlchemyUnitOfWork(sessionmaker),
             catalog=catalog,
             clock=clock,
         ),
@@ -225,9 +222,10 @@ async def build_batch(settings: Settings) -> BatchDeps:
             index=QdrantVectorIndex(
                 qdrant, collection=settings.collection_alias
             ),
-            embedder=embedder,
+            request_embedding=request_embedding(),
             catalog=catalog,
             clock=clock,
+            expected_model=settings.expected_model,
         ),
         provisioner=CollectionProvisioner(
             qdrant, collection=physical, dim=settings.embedding_dim
@@ -235,4 +233,5 @@ async def build_batch(settings: Settings) -> BatchDeps:
         alias=settings.collection_alias,
         qdrant=qdrant,
         http=http,
+        engine=engine,
     )

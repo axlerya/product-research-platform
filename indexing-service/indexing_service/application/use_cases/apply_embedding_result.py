@@ -230,4 +230,5 @@ class ApplyEmbeddingResult:
             dense=item.dense,
             sparse=item.sparse,
             token_count=item.token_count,
+            collection=job.target_collection,
         )

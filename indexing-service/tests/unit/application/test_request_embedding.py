@@ -38,13 +38,18 @@ class _FakeJobs:
 
     async def upsert(self, job) -> None:
         self.store[job.job_id] = job
-        self.by_product[(job.product_id, job.content_version)] = job
+        key = (job.product_id, job.content_version, job.target_collection)
+        self.by_product[key] = job
 
     async def get(self, job_id):
         return self.store.get(job_id)
 
-    async def get_by_product(self, product_id, content_version):
-        return self.by_product.get((product_id, content_version))
+    async def get_by_product(
+        self, product_id, content_version, target_collection=None
+    ):
+        return self.by_product.get(
+            (product_id, content_version, target_collection)
+        )
 
 
 class _FakeRequests:
@@ -232,6 +237,22 @@ async def test_request_id_is_derived_from_job_and_items():
     assert uow.outbox.messages[0].id == uuid5(
         command.request_id.value, "outbox"
     )
+
+
+async def test_reindex_job_is_not_deduped_against_live_job():
+    """Эпоха reindex — отдельный ключ, иначе не встало бы ни одно задание."""
+    uow = _FakeUoW()
+    use_case = _use_case(uow)
+
+    assert await use_case.handle(_request()) is True
+    assert (
+        await use_case.handle(_request(target_collection="products_v2"))
+        is True
+    )
+
+    assert len(uow.jobs.store) == 2
+    targets = {job.target_collection for job in uow.jobs.store.values()}
+    assert targets == {None, "products_v2"}
 
 
 async def test_target_collection_is_carried_for_reindex():

@@ -1,4 +1,4 @@
-"""Тесты ``ReindexCatalog`` (§8) на фейках."""
+"""Тесты ``ReindexCatalog`` на job-модели (§8, Q6)."""
 
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -8,14 +8,20 @@ from indexing_service.application.dto.snapshot import ProductSnapshot
 from indexing_service.application.use_cases.reindex_catalog import (
     ReindexCatalog,
 )
+from indexing_service.application.use_cases.request_embedding import (
+    RequestEmbedding,
+)
+from indexing_service.domain.services.chunking import SingleDocument
+from indexing_service.domain.value_objects.job_status import JobStatus
 from tests.support.fakes import (
     FakeCatalogGateway,
-    FakeEmbeddingModel,
+    FakeUnitOfWork,
     FakeVectorIndexAdmin,
     FixedClock,
 )
 
 NOW = datetime(2026, 7, 19, 10, 15, 30, tzinfo=UTC)
+TARGET = "products_v2"
 
 
 def _snapshot(seq: int) -> ProductSnapshot:
@@ -39,20 +45,127 @@ def _snapshot(seq: int) -> ProductSnapshot:
     )
 
 
-async def test_reindex_provisions_backfills_and_swaps():
-    admin = FakeVectorIndexAdmin()
-    catalog = FakeCatalogGateway([_snapshot(1), _snapshot(2)])
-    reindex = ReindexCatalog(
+def _reindex(admin, uow, catalog):
+    clock = FixedClock(NOW)
+    return ReindexCatalog(
         admin=admin,
-        embedder=FakeEmbeddingModel(),
+        request_embedding=RequestEmbedding(
+            uow,
+            clock,
+            chunker=SingleDocument(),
+            expected_model=None,
+            max_texts=32,
+        ),
+        uow=uow,
         catalog=catalog,
-        clock=FixedClock(NOW),
+        clock=clock,
     )
-    report = await reindex.execute(
-        target_collection="products_v2", alias="products"
+
+
+async def test_execute_provisions_and_queues_jobs():
+    admin, uow = FakeVectorIndexAdmin(), FakeUnitOfWork()
+    catalog = FakeCatalogGateway([_snapshot(1), _snapshot(2)])
+
+    report = await _reindex(admin, uow, catalog).execute(
+        target_collection=TARGET
     )
-    assert report.indexed == 2
+
+    assert report.queued == 2
+    assert report.skipped == 0
     assert report.errors == 0
-    assert admin.provisioned == ["products_v2"]
-    assert admin.swaps == [("products", "products_v2")]
-    assert len(admin.index.upserts) == 2
+    assert admin.provisioned == [TARGET]
+    # alias не трогаем: эпоха ещё не посчитана
+    assert admin.swaps == []
+    # карточки товаров легли в новую коллекцию, векторов в них нет
+    assert len(admin.index.payload_upserts) == 2
+    # на каждый товар — задание своей эпохи и команда в outbox
+    assert len(uow.jobs.store) == 2
+    assert all(
+        job.target_collection == TARGET for job in uow.jobs.store.values()
+    )
+    assert len(uow.outbox.messages) == 2
+
+
+async def test_rerun_of_epoch_is_idempotent():
+    admin, uow = FakeVectorIndexAdmin(), FakeUnitOfWork()
+    catalog = FakeCatalogGateway([_snapshot(1)])
+    reindex = _reindex(admin, uow, catalog)
+
+    await reindex.execute(target_collection=TARGET)
+    report = await reindex.execute(target_collection=TARGET)
+
+    assert report.queued == 0
+    assert report.skipped == 1
+    assert len(uow.jobs.store) == 1
+
+
+async def test_swap_waits_until_epoch_is_done():
+    admin, uow = FakeVectorIndexAdmin(), FakeUnitOfWork()
+    catalog = FakeCatalogGateway([_snapshot(1), _snapshot(2)])
+    reindex = _reindex(admin, uow, catalog)
+    await reindex.execute(target_collection=TARGET)
+
+    report = await reindex.swap(target_collection=TARGET, alias="products")
+
+    assert report.swapped is False
+    assert report.total == 2
+    assert report.done == 0
+    assert report.pending == 2
+    assert admin.swaps == []
+
+
+async def test_swap_happens_when_all_jobs_done():
+    admin, uow = FakeVectorIndexAdmin(), FakeUnitOfWork()
+    catalog = FakeCatalogGateway([_snapshot(1), _snapshot(2)])
+    reindex = _reindex(admin, uow, catalog)
+    await reindex.execute(target_collection=TARGET)
+    await _finish_all(uow, JobStatus.DONE)
+
+    report = await reindex.swap(target_collection=TARGET, alias="products")
+
+    assert report.swapped is True
+    assert report.done == 2
+    assert admin.swaps == [("products", TARGET)]
+
+
+async def test_threshold_allows_swap_with_stragglers():
+    """Порог позволяет не ждать безнадёжно отставших (Q6)."""
+    admin, uow = FakeVectorIndexAdmin(), FakeUnitOfWork()
+    catalog = FakeCatalogGateway([_snapshot(i) for i in range(1, 5)])
+    reindex = _reindex(admin, uow, catalog)
+    await reindex.execute(target_collection=TARGET)
+    jobs = list(uow.jobs.store.values())
+    await _set_status(uow, jobs[:3], JobStatus.DONE)
+    await _set_status(uow, jobs[3:], JobStatus.FAILED)
+
+    strict = await reindex.swap(target_collection=TARGET, alias="products")
+    lenient = await reindex.swap(
+        target_collection=TARGET, alias="products", min_ready=0.75
+    )
+
+    assert strict.swapped is False
+    assert lenient.swapped is True
+    assert lenient.done == 3
+    assert lenient.failed == 1
+
+
+async def test_swap_of_unknown_epoch_does_nothing():
+    admin, uow = FakeVectorIndexAdmin(), FakeUnitOfWork()
+    reindex = _reindex(admin, uow, FakeCatalogGateway([]))
+
+    report = await reindex.swap(target_collection=TARGET, alias="products")
+
+    assert report.swapped is False
+    assert report.total == 0
+    assert admin.swaps == []
+
+
+async def _finish_all(uow, status) -> None:
+    await _set_status(uow, list(uow.jobs.store.values()), status)
+
+
+async def _set_status(uow, jobs, status) -> None:
+    from dataclasses import replace
+
+    for job in jobs:
+        await uow.jobs.upsert(replace(job, status=status))

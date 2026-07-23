@@ -24,12 +24,36 @@ class ReconcileReport:
 
 @dataclass(frozen=True, slots=True)
 class ReindexReport:
-    """Итоги полной переиндексации (§8).
+    """Итоги постановки эпохи переиндексации (§8, Q6).
+
+    Reindex больше не индексирует сам: он заводит задания, а векторы считает
+    embedding-service. Поэтому отчёт — о поставленном, а не о записанном.
 
     Attributes:
-        indexed: Проиндексировано товаров в новую коллекцию.
+        queued: Заведено заданий на эмбеддинг.
+        skipped: Задание уже было (повторный запуск эпохи).
         errors: Ошибки обработки.
     """
 
-    indexed: int = 0
+    queued: int = 0
+    skipped: int = 0
     errors: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SwapReport:
+    """Итоги попытки переключить alias на новую коллекцию (Q6).
+
+    Attributes:
+        swapped: Переключён ли alias.
+        total: Всего заданий в эпохе.
+        done: Завершено успешно.
+        failed: Завершено с отказом.
+        pending: Ещё в работе.
+    """
+
+    swapped: bool = False
+    total: int = 0
+    done: int = 0
+    failed: int = 0
+    pending: int = 0
