@@ -107,7 +107,7 @@ async def test_job_round_trips_through_repository(sessionmaker_):
     async with SqlAlchemyUnitOfWork(sessionmaker_) as uow:
         by_id = await uow.jobs.get(job.job_id)
         by_product = await uow.jobs.get_by_product(
-            job.product_id, job.content_version
+            job.product_id, job.content_version, job.target_collection
         )
 
     assert by_id == job
