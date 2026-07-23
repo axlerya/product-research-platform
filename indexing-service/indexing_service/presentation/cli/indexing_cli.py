@@ -28,8 +28,23 @@ def reconcile() -> None:
 def reindex(
     target: str = typer.Option(..., help="имя новой коллекции"),
 ) -> None:
-    """Полная переиндексация в новую коллекцию + свап alias (§8)."""
+    """Завести эпоху переиндексации в новую коллекцию (§8).
+
+    Только ставит задания: векторы считает embedding-service. Переключить
+    alias — отдельной командой ``reindex-swap``, когда эпоха будет готова.
+    """
     asyncio.run(_reindex(target))
+
+
+@app.command(name="reindex-swap")
+def reindex_swap(
+    target: str = typer.Option(..., help="имя новой коллекции"),
+    min_ready: float = typer.Option(
+        1.0, help="требуемая доля завершённых заданий (1.0 — все)"
+    ),
+) -> None:
+    """Переключить alias на новую коллекцию, если эпоха готова (Q6)."""
+    asyncio.run(_reindex_swap(target, min_ready))
 
 
 @app.command(name="replay-dlq")
@@ -59,10 +74,27 @@ async def _reconcile() -> None:
 async def _reindex(target: str) -> None:
     deps = await build_batch(get_settings())
     try:
-        report = await deps.reindex.execute(
-            target_collection=target, alias=deps.alias
+        report = await deps.reindex.execute(target_collection=target)
+        typer.echo(str(report))
+        typer.echo(
+            "задания поставлены; alias переключить командой reindex-swap"
+        )
+    finally:
+        await deps.aclose()
+
+
+async def _reindex_swap(target: str, min_ready: float) -> None:
+    deps = await build_batch(get_settings())
+    try:
+        report = await deps.reindex.swap(
+            target_collection=target,
+            alias=deps.alias,
+            min_ready=min_ready,
         )
         typer.echo(str(report))
+        if not report.swapped:
+            typer.echo("эпоха ещё не готова — alias не переключён")
+            raise typer.Exit(code=1)
     finally:
         await deps.aclose()
 
