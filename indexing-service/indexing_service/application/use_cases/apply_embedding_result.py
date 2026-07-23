@@ -27,6 +27,10 @@ from indexing_service.application.ports.clock import Clock
 from indexing_service.application.ports.embedding_sink import (
     EmbeddingResultSink,
 )
+from indexing_service.application.ports.metrics import (
+    IndexingMetrics,
+    NullMetrics,
+)
 from indexing_service.application.ports.unit_of_work import UnitOfWork
 from indexing_service.application.request_id import deterministic_request_id
 from indexing_service.domain.entities.embedding_request import (
@@ -58,6 +62,7 @@ class ApplyEmbeddingResult:
         max_item_attempts: int,
         retry_backoff_s: float,
         retry_backoff_cap_s: float,
+        metrics: IndexingMetrics | None = None,
     ) -> None:
         self._uow = uow
         self._sink = sink
@@ -66,6 +71,7 @@ class ApplyEmbeddingResult:
         self._max_item_attempts = max_item_attempts
         self._retry_backoff_s = retry_backoff_s
         self._retry_backoff_cap_s = retry_backoff_cap_s
+        self._metrics = metrics or NullMetrics()
 
     async def handle(self, result: EmbeddingResult) -> None:
         """Обрабатывает событие-результат (идемпотентно)."""
@@ -83,9 +89,10 @@ class ApplyEmbeddingResult:
             for item in result.items:
                 chunk = job.chunk_by_text_id(item.text_id)
                 if item.is_ok:
-                    await self._sink.apply_chunk(
+                    applied = await self._sink.apply_chunk(
                         self._to_write(job, chunk, result.model_version, item)
                     )
+                    self._metrics.chunk_applied(applied=bool(applied))
                     job = job.mark_chunk_ok(item.text_id)
                 else:
                     job, retries = self._on_error(job, chunk, item, request)
@@ -103,6 +110,11 @@ class ApplyEmbeddingResult:
             job = replace(job, updated_at=now, applied_at=applied_at)
             await uow.jobs.upsert(job)
             await uow.commit()
+            if job.is_terminal:
+                self._metrics.job_finished(
+                    latency_s=(now - job.created_at).total_seconds(),
+                    failed=job.status is JobStatus.FAILED,
+                )
 
     def _validate(self, result: EmbeddingResult, job: IndexingJob) -> None:
         if result.dim != self._expected_dim:
