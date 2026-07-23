@@ -47,7 +47,8 @@ def classify(
         event_version: ``aggregate_version`` события.
         watermark: Текущий водяной знак точки (``None``, если точки нет).
         content_hash: Хэш нового текста (для дедупа ре-эмбеддинга).
-        current_model: Ключ текущей модели эмбеддингов.
+        current_model: Ключ закреплённой модели эмбеддингов; ``None`` —
+            модель не закреплена, дрейф не проверяем (его ловит reconcile).
 
     Returns:
         Действие ``IndexingAction``.
@@ -74,11 +75,15 @@ def classify(
         return IndexingAction.PAYLOAD_ONLY
 
     # CONTENT_CHANGED: пропускаем ре-эмбеддинг, если и текст, и модель те же.
+    # Модель не закреплена (``current_model is None``) — сверять не с чем,
+    # достаточно совпадения текста; дрейф модели ловит reconcile (Q3).
     if (
         content_hash is not None
-        and current_model is not None
         and watermark.content_hash == content_hash
-        and watermark.model_version == current_model
+        and (
+            current_model is None
+            or watermark.model_version == current_model
+        )
     ):
         return IndexingAction.PAYLOAD_ONLY
     return IndexingAction.REEMBED

@@ -111,6 +111,41 @@ def test_content_same_text_different_model_reembeds():
     assert action is IndexingAction.REEMBED
 
 
+def test_content_same_text_without_pinned_model_skips_reembed():
+    """Модель не закреплена — сверять не с чем, хватает совпадения текста."""
+    action = classify(
+        ChangeKind.CONTENT_CHANGED,
+        6,
+        _wm(5, content_hash=_HASH, model="что-угодно"),
+        content_hash=_HASH,
+        current_model=None,
+    )
+    assert action is IndexingAction.PAYLOAD_ONLY
+
+
+def test_content_new_text_without_pinned_model_reembeds():
+    action = classify(
+        ChangeKind.CONTENT_CHANGED,
+        6,
+        _wm(5, content_hash=_HASH),
+        content_hash=ContentHash.of("новое"),
+        current_model=None,
+    )
+    assert action is IndexingAction.REEMBED
+
+
+def test_content_not_yet_embedded_reembeds():
+    """Векторов ещё нет (нет content_hash в знаке) → ставим задание."""
+    action = classify(
+        ChangeKind.CONTENT_CHANGED,
+        6,
+        _wm(5, content_hash=None),
+        content_hash=_HASH,
+        current_model=None,
+    )
+    assert action is IndexingAction.REEMBED
+
+
 def test_content_stale_skipped():
     action = classify(
         ChangeKind.CONTENT_CHANGED,
