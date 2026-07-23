@@ -67,6 +67,8 @@ async def _reconcile() -> None:
     deps = await build_batch(get_settings())
     try:
         typer.echo(str(await deps.reconcile.execute()))
+        # Вторая сторона сверки: команды, на которые не пришёл ответ.
+        typer.echo(str(await deps.reconcile_jobs.execute()))
     finally:
         await deps.aclose()
 

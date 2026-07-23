@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     # Экспоненциальный backoff ретраев чанка: база и потолок задержки.
     item_retry_backoff_s: float = 5.0
     item_retry_backoff_cap_s: float = 300.0
+    # Сверка зависших команд: через сколько считать команду потерянной и
+    # сколько раз переспрашивать, прежде чем звать человека.
+    job_timeout_s: float = 900.0
+    max_request_attempts: int = 5
     log_level: str = "INFO"
     # Наблюдаемость: OTLP-endpoint трейсинга (пусто = трейсинг выключен).
     otlp_endpoint: str | None = None
