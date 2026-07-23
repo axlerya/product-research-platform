@@ -106,6 +106,48 @@ async def test_failure_backs_off_and_leaves_unpublished(sessionmaker_):
     assert await relay.drain_batch() == 0
 
 
+async def test_publish_moves_request_to_awaiting(sessionmaker_):
+    """Опубликованная команда перестаёт быть «ещё не отправленной» (§8)."""
+    job_id = uuid4()
+    request_id = uuid4()
+    async with sessionmaker_() as session:
+        await session.execute(
+            text(
+                "INSERT INTO indexing_jobs (job_id, product_id, sku, "
+                "aggregate_version, content_version, content_hash, action, "
+                "status, chunks, updated_at) VALUES (:job, :product, 'S-1', "
+                "1, 1, :hash, 'full_index', 'pending', '[]'::jsonb, now())"
+            ),
+            {"job": job_id, "product": uuid4(), "hash": "a" * 64},
+        )
+        await session.execute(
+            text(
+                "INSERT INTO embedding_requests (request_id, job_id, "
+                "attempt, items, status) VALUES (:req, :job, 0, "
+                "'[]'::jsonb, 'pending')"
+            ),
+            {"req": request_id, "job": job_id},
+        )
+        await session.commit()
+
+    message = replace(_message(1), aggregate_id=request_id)
+    await _seed(sessionmaker_, [message])
+    await OutboxPublisher(sessionmaker_, _FakePublisher()).drain_all()
+
+    async with sessionmaker_() as session:
+        row = (
+            await session.execute(
+                text(
+                    "SELECT status, requested_at FROM embedding_requests "
+                    "WHERE request_id = :req"
+                ),
+                {"req": request_id},
+            )
+        ).one()
+    assert row.status == "awaiting"
+    assert row.requested_at is not None
+
+
 async def test_delayed_message_waits_for_next_attempt_at(sessionmaker_):
     """Ретрай с backoff не публикуется раньше срока (§8)."""
     due = datetime.now(UTC) + timedelta(hours=1)

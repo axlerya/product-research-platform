@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from indexing_service.application.dto.point import PointRecord, WatermarkEntry
 from indexing_service.domain.value_objects.content_hash import ContentHash
 from indexing_service.domain.value_objects.identifiers import ProductId
+from indexing_service.domain.value_objects.job_status import RequestStatus
 from indexing_service.domain.value_objects.watermark import IndexingWatermark
 
 _FALLBACK_TIME = datetime(2000, 1, 1, tzinfo=UTC)
@@ -176,6 +177,17 @@ class FakeRequestRepository:
 
     async def update(self, request) -> None:
         self.store[request.request_id] = request
+
+    async def find_stale(self, older_than, *, limit: int = 100):
+        pending = (RequestStatus.PENDING, RequestStatus.AWAITING)
+        stale = [
+            request
+            for request in self.store.values()
+            if request.status in pending
+            and (request.requested_at or request.created_at) < older_than
+        ]
+        stale.sort(key=lambda request: request.created_at)
+        return stale[:limit]
 
 
 class FakeOutboxRepository:

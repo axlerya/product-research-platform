@@ -20,6 +20,9 @@ from indexing_service.application.use_cases.process_catalog_event import (
 from indexing_service.application.use_cases.reconcile_catalog import (
     ReconcileCatalog,
 )
+from indexing_service.application.use_cases.reconcile_jobs import (
+    ReconcileJobs,
+)
 from indexing_service.application.use_cases.reindex_catalog import (
     ReindexCatalog,
 )
@@ -112,6 +115,7 @@ class BatchDeps:
 
     reindex: ReindexCatalog
     reconcile: ReconcileCatalog
+    reconcile_jobs: ReconcileJobs
     provisioner: CollectionProvisioner
     alias: str
     qdrant: AsyncQdrantClient
@@ -226,6 +230,14 @@ async def build_batch(settings: Settings) -> BatchDeps:
             catalog=catalog,
             clock=clock,
             expected_model=settings.expected_model,
+        ),
+        reconcile_jobs=ReconcileJobs(
+            SqlAlchemyUnitOfWork(sessionmaker),
+            clock,
+            job_timeout_s=settings.job_timeout_s,
+            max_request_attempts=settings.max_request_attempts,
+            retry_backoff_s=settings.item_retry_backoff_s,
+            retry_backoff_cap_s=settings.item_retry_backoff_cap_s,
         ),
         provisioner=CollectionProvisioner(
             qdrant, collection=physical, dim=settings.embedding_dim

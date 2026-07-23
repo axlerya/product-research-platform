@@ -41,6 +41,21 @@ class ReindexReport:
 
 
 @dataclass(frozen=True, slots=True)
+class JobsReport:
+    """Итоги сверки зависших заданий на эмбеддинг (§10).
+
+    Attributes:
+        stale: Найдено команд без ответа дольше таймаута.
+        requeued: Переспрошено (поставлена команда с ``attempt+1``).
+        exhausted: Попытки исчерпаны — нужен ручной разбор.
+    """
+
+    stale: int = 0
+    requeued: int = 0
+    exhausted: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class SwapReport:
     """Итоги попытки переключить alias на новую коллекцию (Q6).
 

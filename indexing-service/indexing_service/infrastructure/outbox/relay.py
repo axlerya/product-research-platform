@@ -11,7 +11,11 @@ from datetime import timedelta
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from indexing_service.infrastructure.db.models import OutboxORM
+from indexing_service.domain.value_objects.job_status import RequestStatus
+from indexing_service.infrastructure.db.models import (
+    EmbeddingRequestORM,
+    OutboxORM,
+)
 from indexing_service.infrastructure.messaging.broker import EventPublisher
 
 _BACKOFF_CAP_S = 300
@@ -62,6 +66,7 @@ class OutboxPublisher:
             if not rows:
                 return 0
             published: list = []
+            requested: list = []
             for row in rows:
                 try:
                     await self._publisher.publish(
@@ -78,13 +83,37 @@ class OutboxPublisher:
                     await self._mark_failed(session, row, exc)
                 else:
                     published.append(row.id)
+                    requested.append(row.aggregate_id)
             if published:
                 await session.execute(
                     update(OutboxORM)
                     .where(OutboxORM.id.in_(published))
                     .values(published_at=func.now())
                 )
+                await self._mark_requested(session, requested)
             return len(rows)
+
+    @staticmethod
+    async def _mark_requested(
+        session: AsyncSession, request_ids: list
+    ) -> None:
+        """Переводит опубликованные команды в ``awaiting`` (§8).
+
+        Без этого команда навсегда осталась бы в ``pending``, и сверка не
+        смогла бы отличить «ещё не отправлено» от «отправлено, ответа нет».
+        """
+        if not request_ids:
+            return
+        await session.execute(
+            update(EmbeddingRequestORM)
+            .where(
+                EmbeddingRequestORM.request_id.in_(request_ids),
+                EmbeddingRequestORM.status == RequestStatus.PENDING,
+            )
+            .values(
+                status=RequestStatus.AWAITING, requested_at=func.now()
+            )
+        )
 
     async def drain_all(self) -> int:
         """Публикует все доступные батчи, пока очередь не опустеет."""
