@@ -51,6 +51,7 @@ def build_command_message(
     return_dense: bool = True,
     return_sparse: bool = True,
     trace_id: str | None = None,
+    next_attempt_at: datetime | None = None,
 ) -> OutboxMessage:
     """Собирает ``OutboxMessage`` с конвертом команды в ``payload``.
 
@@ -63,6 +64,7 @@ def build_command_message(
         return_dense: Запрашивать dense-векторы.
         return_sparse: Запрашивать sparse-векторы.
         trace_id: W3C traceparent для сквозной трассировки (опционально).
+        next_attempt_at: Отложенная публикация (backoff ретрая) или ``None``.
 
     Returns:
         Строка outbox с self-contained конвертом команды.
@@ -92,4 +94,5 @@ def build_command_message(
         payload=envelope,
         occurred_at=occurred_at,
         headers={"trace_id": trace_id} if trace_id is not None else {},
+        next_attempt_at=next_attempt_at,
     )

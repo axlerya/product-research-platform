@@ -23,6 +23,8 @@ class OutboxMessage:
         payload: Полный конверт команды (JSON-совместимый dict).
         occurred_at: Доменное время постановки команды.
         headers: Заголовки брокера (message_id/trace_id/...).
+        next_attempt_at: Не публиковать раньше этого момента (backoff
+            ретраев); ``None`` — публиковать при ближайшем проходе relay.
     """
 
     id: UUID
@@ -32,3 +34,4 @@ class OutboxMessage:
     payload: dict[str, Any]
     occurred_at: datetime
     headers: dict[str, Any] = field(default_factory=dict)
+    next_attempt_at: datetime | None = None
