@@ -66,6 +66,11 @@ class Settings(BaseSettings):
     outbox_poll_interval_s: float = 1.0
     outbox_max_attempts: int = 10
     outbox_batch_size: int = 100
+    # Ожидаемая модель эмбеддингов: пусто = доверяем текущей модели
+    # embedding-service, дрейф ловит reconcile (Q3).
+    expected_model: str | None = None
+    # Операционный лимит батча embedding-service: длиннее команду не шлём.
+    max_texts: int = 32
     # Максимум попыток эмбеддинга одного чанка (INFERENCE_FAILED) до DLQ.
     max_item_attempts: int = 5
     # Экспоненциальный backoff ретраев чанка: база и потолок задержки.

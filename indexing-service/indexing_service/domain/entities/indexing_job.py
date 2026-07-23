@@ -6,6 +6,7 @@
 который их использует (`ApplyEmbeddingResult`).
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 
@@ -140,6 +141,27 @@ class IndexingJob:
     def mark_chunk_failed(self, text_id: str) -> "IndexingJob":
         """Помечает чанк перманентно упавшим."""
         return self._map_chunk(text_id, Chunk.mark_failed)
+
+    def rechunk(
+        self, text_id: str, replacements: Sequence[Chunk]
+    ) -> "IndexingJob":
+        """Заменяет чанк под-чанками после дробления текста (Q2 §8).
+
+        Под-чанки встают на место исходного, порядок остальных сохраняется.
+
+        Raises:
+            InvalidJobError: Если чанк не найден или замена пуста.
+        """
+        if not replacements:
+            raise InvalidJobError("замена чанка требует хотя бы под-чанк")
+        self.chunk_by_text_id(text_id)  # проверка наличия
+        chunks: list[Chunk] = []
+        for chunk in self.chunks:
+            if chunk.text_id == text_id:
+                chunks.extend(replacements)
+            else:
+                chunks.append(chunk)
+        return replace(self, chunks=tuple(chunks))
 
     def recompute_status(self) -> "IndexingJob":
         """Пересчитывает статус job из статусов чанков (§8)."""
