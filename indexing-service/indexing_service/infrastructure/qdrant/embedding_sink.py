@@ -3,7 +3,13 @@
 Пишет точку чанка (ключ — ``point_id``) с двумя водяными знаками
 (``aggregate_version`` + ``content_version``, §9.4). Guard по
 ``content_version``: результат старее уже записанного — пропускаем (не
-затираем свежий текст). Инфраструктурные сбои → ``VectorIndexError`` (ретрай).
+затираем свежий текст).
+
+Семантика записи — **merge**: если точка уже есть, дописываем векторы
+(``update_vectors``) и знаки (``set_payload``), не трогая остальной payload;
+``upsert`` применяем только к отсутствующей точке. Иначе async-результат снёс
+бы коммерческие поля товара (цена/остаток/маржа), которые пишет синхронный
+путь. Инфраструктурные сбои → ``VectorIndexError`` (ретрай).
 """
 
 from datetime import UTC, datetime
@@ -41,18 +47,50 @@ class QdrantEmbeddingSink:
 
     async def apply_chunk(self, write: ChunkWrite) -> bool:
         """Пишет точку чанка; ``False`` — пропущено как устаревшее."""
-        stored = await self._stored_content_version(write.point_id)
-        if stored is not None and stored >= write.content_version:
-            return False
-        await self._guard(
-            self._client.upsert(
-                collection_name=self._collection,
-                points=[self._to_point(write)],
+        stored = await self._stored_payload(write.point_id)
+        if stored is None:
+            # Точки ещё нет — создаём целиком (первая индексация чанка).
+            await self._guard(
+                self._client.upsert(
+                    collection_name=self._collection,
+                    points=[self._to_point(write)],
+                )
             )
-        )
+            return True
+        version = stored.get("content_version")
+        if version is not None and int(version) >= write.content_version:
+            return False
+        await self._merge(write)
         return True
 
-    async def _stored_content_version(self, point_id: str) -> int | None:
+    async def _merge(self, write: ChunkWrite) -> None:
+        """Дописывает векторы и знаки, сохраняя остальной payload (§9.4).
+
+        ``upsert`` заменил бы payload целиком и снёс коммерческие поля
+        (цена/остаток/маржа), которые пишет синхронный путь.
+        """
+        vectors = self._named_vectors(write)
+        if vectors:
+            await self._guard(
+                self._client.update_vectors(
+                    collection_name=self._collection,
+                    points=[
+                        models.PointVectors(
+                            id=write.point_id, vector=vectors
+                        )
+                    ],
+                )
+            )
+        await self._guard(
+            self._client.set_payload(
+                collection_name=self._collection,
+                payload=self._payload(write),
+                points=[write.point_id],
+            )
+        )
+
+    async def _stored_payload(self, point_id: str) -> dict | None:
+        """Payload точки или ``None``, если точки нет в коллекции."""
         records = await self._guard(
             self._client.retrieve(
                 collection_name=self._collection,
@@ -63,11 +101,18 @@ class QdrantEmbeddingSink:
         )
         if not records:
             return None
-        value = (records[0].payload or {}).get("content_version")
-        return int(value) if value is not None else None
+        return records[0].payload or {}
+
+    @classmethod
+    def _to_point(cls, write: ChunkWrite) -> models.PointStruct:
+        return models.PointStruct(
+            id=write.point_id,
+            vector=cls._named_vectors(write),
+            payload=cls._payload(write),
+        )
 
     @staticmethod
-    def _to_point(write: ChunkWrite) -> models.PointStruct:
+    def _named_vectors(write: ChunkWrite) -> dict[str, object]:
         vectors: dict[str, object] = {}
         if write.dense is not None:
             vectors[DENSE_VECTOR] = list(write.dense)
@@ -76,6 +121,10 @@ class QdrantEmbeddingSink:
                 indices=list(write.sparse.indices),
                 values=list(write.sparse.values),
             )
+        return vectors
+
+    @staticmethod
+    def _payload(write: ChunkWrite) -> dict[str, object]:
         payload: dict[str, object] = {
             "product_id": str(write.product_id),
             "sku": write.sku,
@@ -90,9 +139,7 @@ class QdrantEmbeddingSink:
         }
         if write.token_count is not None:
             payload["token_count"] = write.token_count
-        return models.PointStruct(
-            id=write.point_id, vector=vectors, payload=payload
-        )
+        return payload
 
     @staticmethod
     async def _guard(awaitable):
