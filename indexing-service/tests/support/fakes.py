@@ -3,10 +3,17 @@
 ``FakeVectorIndex`` хранит точки как payload + признак наличия векторов;
 водяной знак восстанавливается из payload (как реальный адаптер читает
 его из Qdrant). ``FakeUnitOfWork`` даёт транзакционную границу без БД.
+
+Модель точек — chunked: у товара есть корневая точка (``chunk_ix`` 0 или
+отсутствует, id == UUID товара) и, после rechunk, дополнительные чанк-точки.
+``set_payload`` бьёт по всем точкам товара (как фильтр ``product_id`` в
+Qdrant), ``scroll_watermarks`` отдаёт только корневые.
 """
 
 from datetime import UTC, datetime
+from uuid import UUID
 
+from indexing_service.application.chunk_identity import chunk_point_id
 from indexing_service.application.dto.point import PointRecord, WatermarkEntry
 from indexing_service.domain.value_objects.content_hash import ContentHash
 from indexing_service.domain.value_objects.identifiers import ProductId
@@ -14,6 +21,11 @@ from indexing_service.domain.value_objects.job_status import RequestStatus
 from indexing_service.domain.value_objects.watermark import IndexingWatermark
 
 _FALLBACK_TIME = datetime(2000, 1, 1, tzinfo=UTC)
+
+
+def _is_root(payload: dict) -> bool:
+    """Корневая точка товара: ``chunk_ix`` отсутствует или равен нулю."""
+    return int(payload.get("chunk_ix", 0)) == 0
 
 
 def _watermark(payload: dict) -> IndexingWatermark:
@@ -35,74 +47,119 @@ class FakeVectorIndex:
     """In-memory ``VectorIndex``: точка = payload + признак векторов."""
 
     def __init__(self) -> None:
-        self._points: dict[ProductId, dict] = {}
+        # Ключ — id точки Qdrant (строка), а не товар: у товара может быть
+        # несколько точек (корневая + чанки после rechunk).
+        self._points: dict[str, dict] = {}
         self.upserts: list[PointRecord] = []
         self.vector_updates: list[ProductId] = []
         self.payload_sets: list[tuple[ProductId, dict]] = []
         self.payload_upserts: list[tuple[ProductId, dict]] = []
 
     def preload(self, product_id: ProductId, payload: dict) -> None:
-        self._points[product_id] = {"payload": dict(payload), "vectors": True}
+        """Кладёт корневую точку товара."""
+        self._write(str(product_id.value), payload, vectors=True)
+
+    def preload_chunk(
+        self, product_id: ProductId, chunk_ix: int, payload: dict
+    ) -> None:
+        """Кладёт чанк-точку товара (``chunk_ix`` > 0) — как пишет sink."""
+        point_id = chunk_point_id(product_id.value, chunk_ix)
+        self._write(
+            point_id,
+            {
+                **payload,
+                "product_id": str(product_id.value),
+                "chunk_ix": chunk_ix,
+            },
+            vectors=True,
+        )
+
+    def _write(self, point_id: str, payload: dict, *, vectors: bool) -> None:
+        self._points[point_id] = {
+            "payload": dict(payload),
+            "vectors": vectors,
+        }
+
+    def _entry(self, point_id: str) -> dict:
+        return self._points.setdefault(
+            point_id, {"payload": {}, "vectors": False}
+        )
+
+    def _points_of(self, product_id: ProductId) -> list[dict]:
+        """Все точки товара: корневая по id + чанки по ``product_id``."""
+        root_id = str(product_id.value)
+        matched = [
+            entry
+            for point_id, entry in self._points.items()
+            if point_id == root_id
+            or entry["payload"].get("product_id") == root_id
+        ]
+        return matched or [self._entry(root_id)]
 
     async def get_watermark(
         self, product_id: ProductId
     ) -> IndexingWatermark | None:
-        entry = self._points.get(product_id)
+        entry = self._points.get(str(product_id.value))
         return _watermark(entry["payload"]) if entry else None
 
     async def scroll_watermarks(self):
-        for product_id, entry in self._points.items():
+        for point_id, entry in self._points.items():
             payload = entry["payload"]
-            if "aggregate_version" not in payload:
+            if "aggregate_version" not in payload or not _is_root(payload):
                 continue
             yield WatermarkEntry(
-                product_id=product_id,
+                product_id=ProductId(UUID(point_id)),
                 watermark=_watermark(payload),
                 is_deleted=bool(payload.get("is_deleted", False)),
             )
 
     async def upsert_document(self, point: PointRecord) -> None:
-        self._points[point.product_id] = {
-            "payload": dict(point.payload),
-            "vectors": True,
-        }
+        self._write(str(point.product_id.value), point.payload, vectors=True)
         self.upserts.append(point)
 
     async def upsert_payload(self, product_id, fields) -> None:
-        entry = self._points.setdefault(
-            product_id, {"payload": {}, "vectors": False}
-        )
-        entry["payload"].update(fields)
+        # Создаёт/обновляет только корневую точку товара.
+        self._entry(str(product_id.value))["payload"].update(fields)
         self.payload_upserts.append((product_id, dict(fields)))
 
     async def update_vectors(self, product_id, embedding) -> None:
-        entry = self._points.setdefault(
-            product_id, {"payload": {}, "vectors": False}
-        )
-        entry["vectors"] = True
+        self._entry(str(product_id.value))["vectors"] = True
         self.vector_updates.append(product_id)
 
     async def set_payload(self, product_id, fields) -> None:
-        entry = self._points.setdefault(
-            product_id, {"payload": {}, "vectors": False}
-        )
-        entry["payload"].update(fields)
+        # Мерж во ВСЕ точки товара (в Qdrant — фильтр по ``product_id``).
+        for entry in self._points_of(product_id):
+            entry["payload"].update(fields)
         self.payload_sets.append((product_id, dict(fields)))
 
     def payload_of(self, product_id: ProductId) -> dict:
-        return self._points[product_id]["payload"]
+        """Payload корневой точки товара."""
+        return self._points[str(product_id.value)]["payload"]
+
+    def chunk_payloads(self, product_id: ProductId) -> list[dict]:
+        """Payload'ы чанк-точек товара (``chunk_ix`` > 0)."""
+        root_id = str(product_id.value)
+        return [
+            entry["payload"]
+            for entry in self._points.values()
+            if entry["payload"].get("product_id") == root_id
+            and not _is_root(entry["payload"])
+        ]
 
     def exists(self, product_id: ProductId) -> bool:
-        return product_id in self._points
+        return str(product_id.value) in self._points
 
 
 class FakeVectorIndexAdmin:
-    """In-memory ``VectorIndexAdmin`` — общий ``FakeVectorIndex`` writer."""
+    """In-memory ``VectorIndexAdmin``: свой ``FakeVectorIndex`` на коллекцию."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, alias: str = "products") -> None:
         self.index = FakeVectorIndex()
+        self._writers: dict[str, FakeVectorIndex] = {alias: self.index}
         self.provisioned: list[str] = []
         self.swaps: list[tuple[str, str]] = []
+        # Сколько готовых корневых точек эпохи «лежит» в коллекции.
+        self.ready_roots: dict[str, int] = {}
 
     async def provision(self, collection: str) -> None:
         self.provisioned.append(collection)
@@ -111,7 +168,16 @@ class FakeVectorIndexAdmin:
         self.swaps.append((alias, to_collection))
 
     def writer(self, collection: str) -> FakeVectorIndex:
-        return self.index
+        return self._writers.setdefault(collection, FakeVectorIndex())
+
+    async def count_ready_roots(
+        self,
+        collection: str,
+        *,
+        epoch: str,
+        expected_model: str | None = None,
+    ) -> int:
+        return self.ready_roots.get(collection, 0)
 
 
 class FakeCatalogGateway:

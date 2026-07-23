@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 from qdrant_client import models
 
+from indexing_service.application.chunk_identity import chunk_point_id
 from indexing_service.application.dto.point import PointRecord
 from indexing_service.domain.value_objects.dense_vector import DenseVector
 from indexing_service.domain.value_objects.embedding import Embedding
@@ -16,6 +17,7 @@ from indexing_service.domain.value_objects.sparse_vector import SparseVector
 from indexing_service.infrastructure.qdrant.collection_provisioner import (
     CollectionProvisioner,
 )
+from indexing_service.infrastructure.qdrant.index_admin import QdrantIndexAdmin
 from indexing_service.infrastructure.qdrant.vector_index import (
     QdrantVectorIndex,
 )
@@ -78,6 +80,84 @@ async def test_upsert_watermark_and_set_payload_preserves_vectors(
     entries = [e async for e in index.scroll_watermarks()]
     assert len(entries) == 1
     assert entries[0].product_id == pid
+
+
+async def test_count_ready_roots_ignores_chunks_and_unfinished(qdrant_client):
+    """Гейт свапа считает только готовые корневые точки эпохи."""
+    collection = f"epoch_cnt_{uuid4().hex[:8]}"
+    admin = QdrantIndexAdmin(qdrant_client, dim=4)
+    await admin.provision(collection)
+    ready_root = ProductId.new()
+    no_vectors = ProductId.new()
+    await qdrant_client.upsert(
+        collection_name=collection,
+        points=[
+            # готовая корневая точка эпохи
+            models.PointStruct(
+                id=str(ready_root.value),
+                vector={"dense": [0.1, 0.2, 0.3, 0.4]},
+                payload={
+                    "product_id": str(ready_root.value),
+                    "content_version": 1,
+                    "model_version": "m",
+                    "reindex_epoch": collection,
+                },
+            ),
+            # чанк той же эпохи — за товар не считается
+            models.PointStruct(
+                id=chunk_point_id(ready_root.value, 1),
+                vector={"dense": [0.1, 0.2, 0.3, 0.4]},
+                payload={
+                    "product_id": str(ready_root.value),
+                    "chunk_ix": 1,
+                    "content_version": 1,
+                    "model_version": "m",
+                    "reindex_epoch": collection,
+                },
+            ),
+            # карточка без векторов: метки эпохи и модели нет
+            models.PointStruct(
+                id=str(no_vectors.value),
+                vector={},
+                payload={"product_id": str(no_vectors.value), "price": 1.0},
+            ),
+        ],
+    )
+
+    total = await admin.count_ready_roots(
+        collection, epoch=collection, expected_model="m"
+    )
+
+    assert total == 1
+
+
+async def test_count_ready_roots_ignores_other_epoch(qdrant_client):
+    """Точки прошлой эпохи не засчитываются в готовность новой."""
+    collection = f"epoch_old_{uuid4().hex[:8]}"
+    admin = QdrantIndexAdmin(qdrant_client, dim=4)
+    await admin.provision(collection)
+    pid = ProductId.new()
+    await qdrant_client.upsert(
+        collection_name=collection,
+        points=[
+            models.PointStruct(
+                id=str(pid.value),
+                vector={"dense": [0.1, 0.2, 0.3, 0.4]},
+                payload={
+                    "product_id": str(pid.value),
+                    "content_version": 1,
+                    "model_version": "m",
+                    "reindex_epoch": "products_v1",
+                },
+            )
+        ],
+    )
+
+    total = await admin.count_ready_roots(
+        collection, epoch=collection, expected_model="m"
+    )
+
+    assert total == 0
 
 
 async def test_alias_swap_and_hybrid_query(qdrant_client):
