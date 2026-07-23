@@ -46,6 +46,7 @@ class FakeVectorIndex:
         self.upserts: list[PointRecord] = []
         self.vector_updates: list[ProductId] = []
         self.payload_sets: list[tuple[ProductId, dict]] = []
+        self.payload_upserts: list[tuple[ProductId, dict]] = []
 
     def preload(self, product_id: ProductId, payload: dict) -> None:
         self._points[product_id] = {"payload": dict(payload), "vectors": True}
@@ -73,6 +74,13 @@ class FakeVectorIndex:
             "vectors": True,
         }
         self.upserts.append(point)
+
+    async def upsert_payload(self, product_id, fields) -> None:
+        entry = self._points.setdefault(
+            product_id, {"payload": {}, "vectors": False}
+        )
+        entry["payload"].update(fields)
+        self.payload_upserts.append((product_id, dict(fields)))
 
     async def update_vectors(self, product_id, embedding) -> None:
         entry = self._points.setdefault(
@@ -156,6 +164,72 @@ class FakeCatalogGateway:
 
     def iter_products(self, *, batch: int = 100):
         return self._iter()
+
+
+class FakeJobRepository:
+    """In-memory ``IndexingJobRepository``."""
+
+    def __init__(self) -> None:
+        self.store: dict = {}
+        self._by_product: dict[tuple, object] = {}
+
+    async def upsert(self, job) -> None:
+        self.store[job.job_id] = job
+        self._by_product[(job.product_id, job.content_version)] = job
+
+    async def get(self, job_id):
+        return self.store.get(job_id)
+
+    async def get_by_product(self, product_id, content_version):
+        return self._by_product.get((product_id, content_version))
+
+
+class FakeRequestRepository:
+    """In-memory ``EmbeddingRequestRepository``."""
+
+    def __init__(self) -> None:
+        self.store: dict = {}
+
+    async def add(self, request) -> None:
+        self.store[request.request_id] = request
+
+    async def get(self, request_id):
+        return self.store.get(request_id)
+
+    async def update(self, request) -> None:
+        self.store[request.request_id] = request
+
+
+class FakeOutboxRepository:
+    """In-memory ``OutboxRepository``."""
+
+    def __init__(self) -> None:
+        self.messages: list = []
+
+    async def add_many(self, messages) -> None:
+        self.messages.extend(messages)
+
+
+class FakeUnitOfWork:
+    """In-memory ``UnitOfWork``: три репозитория + счётчик коммитов."""
+
+    def __init__(self) -> None:
+        self.jobs = FakeJobRepository()
+        self.requests = FakeRequestRepository()
+        self.outbox = FakeOutboxRepository()
+        self.commits = 0
+
+    async def __aenter__(self) -> "FakeUnitOfWork":
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        return None
+
+    async def commit(self) -> None:
+        self.commits += 1
+
+    async def rollback(self) -> None:
+        pass
 
 
 class FixedClock:

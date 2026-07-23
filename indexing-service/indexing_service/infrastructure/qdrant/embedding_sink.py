@@ -131,6 +131,9 @@ class QdrantEmbeddingSink:
             "chunk_ix": write.chunk_ix,
             "aggregate_version": write.aggregate_version,
             "content_version": write.content_version,
+            # Водяные знаки текста и модели ставит только тот, кто посчитал
+            # векторы: до этого момента текст не проиндексирован (§9.4).
+            "content_hash": write.content_hash,
             "model_version": write.model_version,
             "indexed_at": datetime.now(UTC).isoformat(),
         }

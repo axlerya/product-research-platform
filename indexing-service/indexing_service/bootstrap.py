@@ -23,6 +23,10 @@ from indexing_service.application.use_cases.reconcile_catalog import (
 from indexing_service.application.use_cases.reindex_catalog import (
     ReindexCatalog,
 )
+from indexing_service.application.use_cases.request_embedding import (
+    RequestEmbedding,
+)
+from indexing_service.domain.services.chunking import SingleDocument
 from indexing_service.infrastructure.catalog.http_client import (
     HttpCatalogClient,
 )
@@ -62,10 +66,12 @@ class ConsumerDeps:
     use_case: ProcessCatalogEvent
     qdrant: AsyncQdrantClient
     http: httpx.AsyncClient
+    engine: AsyncEngine
 
     async def aclose(self) -> None:
         await self.qdrant.close()
         await self.http.aclose()
+        await self.engine.dispose()
 
 
 def _build_embedder(settings: Settings):
@@ -96,15 +102,26 @@ async def build_consumer(settings: Settings) -> ConsumerDeps:
     await provisioner.point_alias(settings.collection_alias)
 
     http = httpx.AsyncClient(timeout=10.0)
+    engine = build_engine(settings)
+    clock = SystemClock()
     use_case = ProcessCatalogEvent(
         index=QdrantVectorIndex(
             qdrant, collection=settings.collection_alias
         ),
-        embedder=_build_embedder(settings),
+        request_embedding=RequestEmbedding(
+            SqlAlchemyUnitOfWork(build_sessionmaker(engine)),
+            clock,
+            chunker=SingleDocument(),
+            expected_model=settings.expected_model,
+            max_texts=settings.max_texts,
+        ),
         catalog=HttpCatalogClient(http, base_url=settings.catalog_base_url),
-        clock=SystemClock(),
+        clock=clock,
+        expected_model=settings.expected_model,
     )
-    return ConsumerDeps(use_case=use_case, qdrant=qdrant, http=http)
+    return ConsumerDeps(
+        use_case=use_case, qdrant=qdrant, http=http, engine=engine
+    )
 
 
 @dataclass
