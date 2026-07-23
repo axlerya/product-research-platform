@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 import httpx
 from faststream.rabbit import RabbitBroker
+from prometheus_client import CollectorRegistry
 from qdrant_client import AsyncQdrantClient
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -44,6 +45,10 @@ from indexing_service.infrastructure.db.unit_of_work import (
 from indexing_service.infrastructure.messaging.broker import (
     RabbitEmbeddingPublisher,
     build_broker,
+)
+from indexing_service.infrastructure.observability.metrics import (
+    BacklogGauges,
+    build_metrics,
 )
 from indexing_service.infrastructure.outbox.relay import OutboxPublisher
 from indexing_service.infrastructure.qdrant.collection_provisioner import (
@@ -136,13 +141,16 @@ class RelayDeps:
     publisher: OutboxPublisher
     interval: float
     engine: AsyncEngine
+    gauges: BacklogGauges | None = None
 
     async def aclose(self) -> None:
         await self.engine.dispose()
 
 
-def build_relay(settings: Settings) -> RelayDeps:
-    """Собирает outbox-relay (движок БД + брокер + publisher)."""
+def build_relay(
+    settings: Settings, *, registry: CollectorRegistry | None = None
+) -> RelayDeps:
+    """Собирает outbox-relay (движок БД + брокер + publisher + метрики)."""
     engine = build_engine(settings)
     sessionmaker = build_sessionmaker(engine)
     broker = build_broker(settings)
@@ -157,6 +165,11 @@ def build_relay(settings: Settings) -> RelayDeps:
         publisher=publisher,
         interval=settings.outbox_poll_interval_s,
         engine=engine,
+        gauges=(
+            BacklogGauges(sessionmaker, registry)
+            if registry is not None
+            else None
+        ),
     )
 
 
@@ -173,8 +186,10 @@ class ResultConsumerDeps:
         await self.engine.dispose()
 
 
-def build_result_consumer(settings: Settings) -> ResultConsumerDeps:
-    """Собирает ``ApplyEmbeddingResult`` (UoW + Qdrant-sink)."""
+def build_result_consumer(
+    settings: Settings, *, registry: CollectorRegistry | None = None
+) -> ResultConsumerDeps:
+    """Собирает ``ApplyEmbeddingResult`` (UoW + Qdrant-sink + метрики)."""
     engine = build_engine(settings)
     uow = SqlAlchemyUnitOfWork(build_sessionmaker(engine))
     qdrant = AsyncQdrantClient(
@@ -188,6 +203,7 @@ def build_result_consumer(settings: Settings) -> ResultConsumerDeps:
         max_item_attempts=settings.max_item_attempts,
         retry_backoff_s=settings.item_retry_backoff_s,
         retry_backoff_cap_s=settings.item_retry_backoff_cap_s,
+        metrics=build_metrics(registry) if registry is not None else None,
     )
     return ResultConsumerDeps(use_case=use_case, engine=engine, qdrant=qdrant)
 

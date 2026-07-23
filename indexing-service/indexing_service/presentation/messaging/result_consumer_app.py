@@ -81,7 +81,7 @@ async def on_embedding_result(
 
 @app.on_startup
 async def _startup(context: ContextRepo) -> None:
-    deps = build_result_consumer(_settings)
+    deps = build_result_consumer(_settings, registry=_registry)
     context.set_global("deps", deps)
     context.set_global("use_case", deps.use_case)
     context.set_global("parker", _park)
