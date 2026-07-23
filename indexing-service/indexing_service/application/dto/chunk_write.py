@@ -27,6 +27,8 @@ class ChunkWrite:
         dense: Плотный вектор или ``None``.
         sparse: Разреженный вектор или ``None``.
         token_count: Число токенов или ``None``.
+        collection: Целевая коллекция (reindex) или ``None`` — писать в
+            alias. Без неё результаты эпохи reindex ушли бы в живой индекс.
     """
 
     point_id: str
@@ -40,3 +42,4 @@ class ChunkWrite:
     dense: tuple[float, ...] | None
     sparse: SparseData | None
     token_count: int | None
+    collection: str | None = None

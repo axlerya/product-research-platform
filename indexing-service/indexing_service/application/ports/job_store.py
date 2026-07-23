@@ -9,6 +9,7 @@ from indexing_service.domain.value_objects.identifiers import (
     ProductId,
     RequestId,
 )
+from indexing_service.domain.value_objects.job_status import JobStatus
 
 
 class IndexingJobRepository(Protocol):
@@ -22,8 +23,17 @@ class IndexingJobRepository(Protocol):
         """Возвращает job по идентификатору или ``None``."""
         ...
 
+    async def epoch_counts(
+        self, target_collection: str
+    ) -> dict[JobStatus, int]:
+        """Считает задания целевой коллекции по статусам (Q6)."""
+        ...
+
     async def get_by_product(
-        self, product_id: ProductId, content_version: int
+        self,
+        product_id: ProductId,
+        content_version: int,
+        target_collection: str | None = None,
     ) -> IndexingJob | None:
         """Возвращает job товара на данной версии текста или ``None``."""
         ...
