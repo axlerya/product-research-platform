@@ -1,20 +1,31 @@
 name: indexing-service
 
-# FAKE-режим: конвейер работает без загрузки BGE-M3 (для smoke/CI). Для
-# продакшена соберите образ с extra "embedding", задайте
-# INDEXING_EMBEDDING_MODE=local и INDEXING_EMBEDDING_DIM=1024.
+# Локальный стек всего конвейера: каталог → job+outbox → relay →
+# embedding.jobs → embedding-service → embedding.events → Qdrant.
+#
+# Профиль `fake-embedding` поднимает заглушку embedding-service: она читает
+# команды и сразу отвечает событиями с детерминированными векторами, чтобы
+# конвейер можно было прогнать целиком без модели и GPU.
 x-app-env: &app-env
   INDEXING_RABBITMQ_DSN: amqp://guest:guest@rabbitmq:5672/
+  INDEXING_DATABASE_URL: postgresql+asyncpg://indexing:indexing@postgres:5432/indexing
   INDEXING_QDRANT_URL: http://qdrant:6333
   INDEXING_CATALOG_BASE_URL: http://host.docker.internal:8000
   INDEXING_DEFAULT_CURRENCY: RUB
-  INDEXING_EMBEDDING_MODE: fake
   INDEXING_EMBEDDING_DIM: "8"
 
 x-build: &app-build
   build:
     context: ..
     dockerfile: docker/Dockerfile
+
+x-depends: &app-depends
+  rabbitmq:
+    condition: service_healthy
+  postgres:
+    condition: service_healthy
+  qdrant:
+    condition: service_started
 
 services:
   qdrant:
@@ -24,6 +35,22 @@ services:
       - "6334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: indexing
+      POSTGRES_PASSWORD: indexing
+      POSTGRES_DB: indexing
+    ports:
+      - "5433:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U indexing -d indexing"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
   rabbitmq:
     image: rabbitmq:3-management-alpine
@@ -36,14 +63,16 @@ services:
       timeout: 5s
       retries: 20
 
+  # Консюмер каталога: событие → карточка в Qdrant + job и команда в outbox.
+  # Единственная роль, накатывающая миграции.
   consumer:
     <<: *app-build
-    environment: *app-env
+    environment:
+      <<: *app-env
+      RUN_MIGRATIONS: "1"
     ports:
       - "8000:8000"
-    depends_on:
-      rabbitmq:
-        condition: service_healthy
+    depends_on: *app-depends
     healthcheck:
       test:
         - CMD-SHELL
@@ -53,6 +82,48 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+
+  # Relay: outbox → exchange embedding.jobs (publisher confirms, SKIP LOCKED).
+  relay:
+    <<: *app-build
+    environment: *app-env
+    depends_on:
+      consumer:
+        condition: service_healthy
+    command:
+      - faststream
+      - run
+      - indexing_service.presentation.messaging.relay_app:app
+
+  # Консюмер результатов: embedding.events → векторы в Qdrant, job → DONE.
+  result-consumer:
+    <<: *app-build
+    environment: *app-env
+    ports:
+      - "8001:8000"
+    depends_on:
+      consumer:
+        condition: service_healthy
+    command:
+      - uvicorn
+      - indexing_service.presentation.messaging.result_consumer_app:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+
+  # Заглушка embedding-service для smoke: команда → событие с векторами.
+  fake-embedding:
+    <<: *app-build
+    profiles: ["fake-embedding"]
+    environment: *app-env
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    command:
+      - python
+      - -m
+      - indexing_service.tools.fake_embedding_service
 
   reindex:
     <<: *app-build
@@ -64,7 +135,19 @@ services:
       - indexing_service
       - reindex
       - --target
-      - products_bge_m3_v2
+      - products_v2
+
+  reindex-swap:
+    <<: *app-build
+    profiles: ["reindex"]
+    environment: *app-env
+    command:
+      - python
+      - -m
+      - indexing_service
+      - reindex-swap
+      - --target
+      - products_v2
 
   reconcile:
     <<: *app-build
@@ -78,3 +161,4 @@ services:
 
 volumes:
   qdrant_data:
+  pg_data:
