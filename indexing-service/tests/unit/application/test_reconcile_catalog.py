@@ -1,4 +1,8 @@
-"""Тесты ``ReconcileCatalog`` (§9) на фейках."""
+"""Тесты ``ReconcileCatalog`` на job-модели (§9).
+
+Reconcile векторы не считает: где нужен пересчёт, он ставит задание, а не
+эмбеддит на месте. Поэтому «починено» проверяется по появлению job.
+"""
 
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -8,12 +12,16 @@ from indexing_service.application.dto.snapshot import ProductSnapshot
 from indexing_service.application.use_cases.reconcile_catalog import (
     ReconcileCatalog,
 )
+from indexing_service.application.use_cases.request_embedding import (
+    RequestEmbedding,
+)
+from indexing_service.domain.services.chunking import SingleDocument
 from indexing_service.domain.services.document_composer import compose
 from indexing_service.domain.value_objects.content_hash import ContentHash
 from indexing_service.domain.value_objects.identifiers import ProductId
 from tests.support.fakes import (
     FakeCatalogGateway,
-    FakeEmbeddingModel,
+    FakeUnitOfWork,
     FakeVectorIndex,
     FixedClock,
 )
@@ -62,56 +70,95 @@ def _wm(version: int, content_hash: str | None) -> dict:
     }
 
 
-def _reconcile(index, embedder, catalog) -> ReconcileCatalog:
+def _reconcile(index, uow, catalog, *, expected_model=None):
+    clock = FixedClock(NOW)
     return ReconcileCatalog(
         index=index,
-        embedder=embedder,
+        request_embedding=RequestEmbedding(
+            uow,
+            clock,
+            chunker=SingleDocument(),
+            expected_model=expected_model,
+            max_texts=32,
+        ),
         catalog=catalog,
-        clock=FixedClock(NOW),
+        clock=clock,
+        expected_model=expected_model,
     )
 
 
-async def test_missing_is_indexed():
-    index, embedder = FakeVectorIndex(), FakeEmbeddingModel()
+async def test_missing_is_queued_for_embedding():
+    index, uow = FakeVectorIndex(), FakeUnitOfWork()
     catalog = FakeCatalogGateway([_snapshot(1, 1)])
-    report = await _reconcile(index, embedder, catalog).execute()
+
+    report = await _reconcile(index, uow, catalog).execute()
+
     assert report.indexed == 1
     assert index.exists(ProductId(UUID(int=1)))
+    assert len(uow.jobs.store) == 1
+    assert len(uow.outbox.messages) == 1
 
 
 async def test_up_to_date_matched():
-    index = FakeVectorIndex()
+    index, uow = FakeVectorIndex(), FakeUnitOfWork()
     index.preload(ProductId(UUID(int=1)), _wm(5, _hash()))
+
     report = await _reconcile(
-        index, FakeEmbeddingModel(), FakeCatalogGateway([_snapshot(1, 5)])
+        index, uow, FakeCatalogGateway([_snapshot(1, 5)])
     ).execute()
+
     assert report.matched == 1
+    assert uow.jobs.store == {}
 
 
-async def test_metrics_drift_repaired_without_reembed():
-    index, embedder = FakeVectorIndex(), FakeEmbeddingModel()
+async def test_metrics_drift_repaired_without_job():
+    index, uow = FakeVectorIndex(), FakeUnitOfWork()
     index.preload(ProductId(UUID(int=1)), _wm(5, _hash()))
     catalog = FakeCatalogGateway([_snapshot(1, 6)])  # версия бумпнута
-    report = await _reconcile(index, embedder, catalog).execute()
+
+    report = await _reconcile(index, uow, catalog).execute()
+
     assert report.repaired == 1
-    assert embedder.calls == 0
-    assert index.payload_of(ProductId(UUID(int=1)))["aggregate_version"] == 6
+    assert uow.jobs.store == {}  # текст тот же — пересчёт не нужен
+    payload = index.payload_of(ProductId(UUID(int=1)))
+    assert payload["aggregate_version"] == 6
+    # водяные знаки не сбиты: векторы по-прежнему актуальны
+    assert payload["content_hash"] == _hash()
+    assert payload["model_version"] == MODEL_KEY
 
 
-async def test_text_drift_reembeds():
-    index, embedder = FakeVectorIndex(), FakeEmbeddingModel()
+async def test_text_drift_queues_reembedding():
+    index, uow = FakeVectorIndex(), FakeUnitOfWork()
     index.preload(ProductId(UUID(int=1)), _wm(5, _hash("Наушники")))
     catalog = FakeCatalogGateway([_snapshot(1, 6, name="Новое имя")])
-    report = await _reconcile(index, embedder, catalog).execute()
+
+    report = await _reconcile(index, uow, catalog).execute()
+
     assert report.repaired == 1
-    assert embedder.calls == 1
+    assert len(uow.jobs.store) == 1
+    assert len(uow.outbox.messages) == 1
+
+
+async def test_model_drift_queues_reembedding():
+    """Дрейф закреплённой модели → пересчёт векторов (§10)."""
+    index, uow = FakeVectorIndex(), FakeUnitOfWork()
+    index.preload(ProductId(UUID(int=1)), _wm(5, _hash()))
+    catalog = FakeCatalogGateway([_snapshot(1, 5)])
+
+    report = await _reconcile(
+        index, uow, catalog, expected_model="другая-модель"
+    ).execute()
+
+    assert report.repaired == 1
+    assert len(uow.jobs.store) == 1
 
 
 async def test_orphan_tombstoned():
-    index = FakeVectorIndex()
+    index, uow = FakeVectorIndex(), FakeUnitOfWork()
     index.preload(ProductId(UUID(int=9)), _wm(3, None))
-    report = await _reconcile(
-        index, FakeEmbeddingModel(), FakeCatalogGateway([])
-    ).execute()
+
+    report = await _reconcile(index, uow, FakeCatalogGateway([])).execute()
+
     assert report.tombstoned == 1
     assert index.payload_of(ProductId(UUID(int=9)))["is_deleted"] is True
+    assert uow.jobs.store == {}
