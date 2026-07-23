@@ -10,6 +10,11 @@
 ``upsert`` применяем только к отсутствующей точке. Иначе async-результат снёс
 бы коммерческие поля товара (цена/остаток/маржа), которые пишет синхронный
 путь. Инфраструктурные сбои → ``VectorIndexError`` (ретрай).
+
+Коллекция выбирается **на каждую запись**: ``write.collection`` (эпоха
+reindex) или коллекция по умолчанию (живой alias). Без этого результаты
+эпохи уходили бы в живой индекс, а новая коллекция оставалась бы без
+векторов — и свап alias отдал бы поиску пустышку.
 """
 
 from datetime import UTC, datetime
@@ -25,6 +30,7 @@ from indexing_service.application.dto.chunk_write import ChunkWrite
 from indexing_service.application.exceptions import VectorIndexError
 from indexing_service.infrastructure.qdrant.collection_spec import (
     DENSE_VECTOR,
+    REINDEX_EPOCH,
     SPARSE_VECTOR,
 )
 
@@ -40,19 +46,24 @@ class QdrantEmbeddingSink:
     """Пишет точки чанков в коллекцию (async-путь), guard по версии текста."""
 
     def __init__(
-        self, client: AsyncQdrantClient, *, collection: str
+        self, client: AsyncQdrantClient, *, default_collection: str
     ) -> None:
         self._client = client
-        self._collection = collection
+        self._default_collection = default_collection
+
+    def _collection_for(self, write: ChunkWrite) -> str:
+        """Куда писать: эпоха reindex или коллекция по умолчанию (alias)."""
+        return write.collection or self._default_collection
 
     async def apply_chunk(self, write: ChunkWrite) -> bool:
         """Пишет точку чанка; ``False`` — пропущено как устаревшее."""
-        stored = await self._stored_payload(write.point_id)
+        collection = self._collection_for(write)
+        stored = await self._stored_payload(collection, write.point_id)
         if stored is None:
             # Точки ещё нет — создаём целиком (первая индексация чанка).
             await self._guard(
                 self._client.upsert(
-                    collection_name=self._collection,
+                    collection_name=collection,
                     points=[self._to_point(write)],
                 )
             )
@@ -60,10 +71,10 @@ class QdrantEmbeddingSink:
         version = stored.get("content_version")
         if version is not None and int(version) >= write.content_version:
             return False
-        await self._merge(write)
+        await self._merge(collection, write)
         return True
 
-    async def _merge(self, write: ChunkWrite) -> None:
+    async def _merge(self, collection: str, write: ChunkWrite) -> None:
         """Дописывает векторы и знаки, сохраняя остальной payload (§9.4).
 
         ``upsert`` заменил бы payload целиком и снёс коммерческие поля
@@ -73,7 +84,7 @@ class QdrantEmbeddingSink:
         if vectors:
             await self._guard(
                 self._client.update_vectors(
-                    collection_name=self._collection,
+                    collection_name=collection,
                     points=[
                         models.PointVectors(
                             id=write.point_id, vector=vectors
@@ -83,17 +94,19 @@ class QdrantEmbeddingSink:
             )
         await self._guard(
             self._client.set_payload(
-                collection_name=self._collection,
+                collection_name=collection,
                 payload=self._payload(write),
                 points=[write.point_id],
             )
         )
 
-    async def _stored_payload(self, point_id: str) -> dict | None:
+    async def _stored_payload(
+        self, collection: str, point_id: str
+    ) -> dict | None:
         """Payload точки или ``None``, если точки нет в коллекции."""
         records = await self._guard(
             self._client.retrieve(
-                collection_name=self._collection,
+                collection_name=collection,
                 ids=[point_id],
                 with_payload=["content_version"],
                 with_vectors=False,
@@ -139,6 +152,11 @@ class QdrantEmbeddingSink:
         }
         if write.token_count is not None:
             payload["token_count"] = write.token_count
+        if write.collection is not None:
+            # Метка эпохи: по ней гейт свапа считает готовые точки (Q6).
+            # Ставится вместе с векторами, поэтому «есть метка» == «есть
+            # векторы» — на это и опирается проверка перед свапом alias.
+            payload[REINDEX_EPOCH] = write.collection
         return payload
 
     @staticmethod

@@ -21,7 +21,9 @@ from indexing_service.infrastructure.qdrant.embedding_sink import (
 _POINT = "11111111-1111-1111-1111-111111111111"
 
 
-def _write(*, content_version: int = 3, dense=(0.1, 0.2), sparse=None):
+def _write(
+    *, content_version: int = 3, dense=(0.1, 0.2), sparse=None, collection=None
+):
     return ChunkWrite(
         point_id=_POINT,
         product_id=UUID(int=7),
@@ -34,6 +36,7 @@ def _write(*, content_version: int = 3, dense=(0.1, 0.2), sparse=None):
         dense=dense,
         sparse=sparse,
         token_count=11,
+        collection=collection,
     )
 
 
@@ -66,11 +69,16 @@ class FakeClient:
 
 
 def _sink(client) -> QdrantEmbeddingSink:
-    return QdrantEmbeddingSink(client, collection="products")
+    return QdrantEmbeddingSink(client, default_collection="products")
 
 
 def _stored(**payload):
     return SimpleNamespace(payload=payload)
+
+
+def _collections(client) -> set[str]:
+    """Коллекции, которых коснулась хоть одна операция."""
+    return {kw["collection_name"] for _, kw in client.calls}
 
 
 async def test_absent_point_is_created_with_upsert():
@@ -151,3 +159,64 @@ async def test_transient_error_translated():
 
     with pytest.raises(VectorIndexError):
         await _sink(Boom()).apply_chunk(_write())
+
+
+# --- Маршрутизация по целевой коллекции (эпоха reindex) ---
+
+
+async def test_regular_indexing_writes_to_default_collection():
+    """Без ``collection`` пишем в alias — обычная (не reindex) индексация."""
+    client = FakeClient(records=[])
+
+    await _sink(client).apply_chunk(_write(collection=None))
+
+    assert _collections(client) == {"products"}
+
+
+async def test_reindex_write_targets_epoch_collection_only():
+    """Все четыре операции идут в целевую коллекцию, alias не трогаем."""
+    client = FakeClient(records=[_stored(content_version=1)])
+
+    await _sink(client).apply_chunk(_write(collection="products_v2"))
+
+    assert client.ops == ["retrieve", "update_vectors", "set_payload"]
+    assert _collections(client) == {"products_v2"}
+
+
+async def test_reindex_upsert_of_absent_point_targets_epoch_collection():
+    """Ветка создания точки (upsert) тоже уважает целевую коллекцию."""
+    client = FakeClient(records=[])
+
+    await _sink(client).apply_chunk(_write(collection="products_v2"))
+
+    assert client.ops == ["retrieve", "upsert"]
+    assert _collections(client) == {"products_v2"}
+
+
+async def test_reindex_guard_reads_stored_version_from_epoch_collection():
+    """Guard по версии смотрит в целевую коллекцию, а не в живой alias."""
+    client = FakeClient(records=[])
+
+    await _sink(client).apply_chunk(_write(collection="products_v2"))
+
+    assert client.kwargs_of("retrieve")["collection_name"] == "products_v2"
+
+
+async def test_reindex_write_stamps_epoch_into_payload():
+    """Гейт свапа считает точки эпохи — метка обязана лечь в payload."""
+    client = FakeClient(records=[])
+
+    await _sink(client).apply_chunk(_write(collection="products_v2"))
+
+    payload = client.kwargs_of("upsert")["points"][0].payload
+    assert payload["reindex_epoch"] == "products_v2"
+
+
+async def test_regular_write_has_no_epoch_marker():
+    """Запись в alias — не эпоха: метки быть не должно."""
+    client = FakeClient(records=[])
+
+    await _sink(client).apply_chunk(_write(collection=None))
+
+    payload = client.kwargs_of("upsert")["points"][0].payload
+    assert "reindex_epoch" not in payload

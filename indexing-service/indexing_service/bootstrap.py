@@ -197,7 +197,9 @@ def build_result_consumer(
     )
     use_case = ApplyEmbeddingResult(
         uow,
-        QdrantEmbeddingSink(qdrant, collection=settings.collection_alias),
+        QdrantEmbeddingSink(
+            qdrant, default_collection=settings.collection_alias
+        ),
         SystemClock(),
         expected_dim=settings.embedding_dim,
         max_item_attempts=settings.max_item_attempts,

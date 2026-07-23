@@ -148,7 +148,7 @@ async def test_generated_event_applies_to_qdrant_and_marks_done(
 
     use_case = ApplyEmbeddingResult(
         SqlAlchemyUnitOfWork(sessionmaker_),
-        QdrantEmbeddingSink(qdrant_client, collection=collection),
+        QdrantEmbeddingSink(qdrant_client, default_collection=collection),
         _Clock(),
         expected_dim=4,
         max_item_attempts=5,
