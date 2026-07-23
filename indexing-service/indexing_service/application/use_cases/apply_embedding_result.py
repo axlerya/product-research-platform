@@ -6,14 +6,16 @@ item-ошибки (Q2) и — в одной транзакции — обнов�
 кладёт ретрай-команды в outbox. Идемпотентен к повторной доставке
 (``request.status == done`` / job терминальна → no-op).
 
-Rechunk для ``TOKENS_EXCEEDED``/``TEXT_TOO_LONG`` — отдельный следующий шаг;
-сейчас такие item помечаются перманентно упавшими.
+Классификация item-ошибок (Q2 §8): ``INFERENCE_FAILED`` — ретрай упавших с
+backoff; ``TOKENS_EXCEEDED``/``TEXT_TOO_LONG`` — rechunk (текст дробится, чанк
+заменяется под-чанками); ``EMPTY_TEXT`` — перманентный отказ.
 """
 
 from dataclasses import replace
 from datetime import timedelta
 from uuid import uuid5
 
+from indexing_service.application.chunk_identity import subchunk_point_id
 from indexing_service.application.dto.chunk_write import ChunkWrite
 from indexing_service.application.dto.embedding_result import (
     EmbeddingResult,
@@ -32,12 +34,15 @@ from indexing_service.domain.entities.embedding_request import (
     RequestItem,
 )
 from indexing_service.domain.entities.indexing_job import Chunk, IndexingJob
+from indexing_service.domain.services.chunking import split_oversize
 from indexing_service.domain.value_objects.identifiers import RequestId
 from indexing_service.domain.value_objects.job_status import (
+    ChunkStatus,
     EmbeddingErrorCode,
     JobStatus,
     RequestStatus,
 )
+from indexing_service.domain.value_objects.search_text import SearchText
 
 
 class ApplyEmbeddingResult:
@@ -83,9 +88,8 @@ class ApplyEmbeddingResult:
                     )
                     job = job.mark_chunk_ok(item.text_id)
                 else:
-                    job, retry = self._on_error(job, chunk, item, request)
-                    if retry is not None:
-                        retry_items.append(retry)
+                    job, retries = self._on_error(job, chunk, item, request)
+                    retry_items.extend(retries)
 
             request = replace(
                 request, status=RequestStatus.DONE, received_at=now
@@ -118,16 +122,49 @@ class ApplyEmbeddingResult:
         chunk: Chunk,
         item: EmbeddingResultItem,
         request: EmbeddingRequest,
-    ) -> tuple[IndexingJob, RequestItem | None]:
+    ) -> tuple[IndexingJob, list[RequestItem]]:
+        """Классифицирует item-ошибку и готовит повтор (Q2 §8)."""
         code = item.error.code
+        if code is EmbeddingErrorCode.EMPTY_TEXT:
+            return job.mark_chunk_failed(item.text_id), []  # не ретраим
+        if chunk.attempts + 1 >= self._max_item_attempts:
+            return job.mark_chunk_failed(item.text_id), []  # попытки вышли
         if code is EmbeddingErrorCode.INFERENCE_FAILED:
-            if chunk.attempts + 1 < self._max_item_attempts:
-                job = job.mark_chunk_retrying(item.text_id)
-                text = self._text_of(request, item.text_id)
-                return job, RequestItem(text_id=item.text_id, text=text)
-            return job.mark_chunk_failed(item.text_id), None
-        # EMPTY_TEXT — перманентно; TOKENS_EXCEEDED/TEXT_TOO_LONG — до rechunk.
-        return job.mark_chunk_failed(item.text_id), None
+            job = job.mark_chunk_retrying(item.text_id)
+            text = self._text_of(request, item.text_id)
+            return job, [RequestItem(text_id=item.text_id, text=text)]
+        # TOKENS_EXCEEDED / TEXT_TOO_LONG — текст не влез, дробим его.
+        return self._rechunk(job, chunk, item, request)
+
+    def _rechunk(
+        self,
+        job: IndexingJob,
+        chunk: Chunk,
+        item: EmbeddingResultItem,
+        request: EmbeddingRequest,
+    ) -> tuple[IndexingJob, list[RequestItem]]:
+        """Заменяет слишком длинный чанк под-чанками (Q2 §8)."""
+        text = self._text_of(request, item.text_id)
+        pieces = split_oversize(SearchText(text))
+        if not pieces:
+            return job.mark_chunk_failed(item.text_id), []  # дробить некуда
+        next_ix = max(existing.chunk_ix for existing in job.chunks) + 1
+        replacements: list[Chunk] = []
+        items: list[RequestItem] = []
+        for index, piece in enumerate(pieces):
+            point_id = subchunk_point_id(chunk.point_id, index)
+            replacements.append(
+                Chunk(
+                    # Нулевой под-чанк остаётся на месте родителя.
+                    chunk_ix=chunk.chunk_ix if index == 0 else next_ix + index,
+                    text_id=point_id,
+                    point_id=point_id,
+                    status=ChunkStatus.RETRYING,
+                    attempts=chunk.attempts + 1,
+                )
+            )
+            items.append(RequestItem(text_id=point_id, text=piece.value))
+        return job.rechunk(item.text_id, replacements), items
 
     async def _enqueue_retry(
         self,

@@ -359,15 +359,75 @@ async def test_empty_text_is_permanent():
     assert uow.outbox.messages == []
 
 
-async def test_tokens_exceeded_permanent_until_rechunk():
+async def test_tokens_exceeded_splits_chunk_and_requeues():
+    """Слишком длинный текст дробится, чанк заменяется под-чанками (Q2)."""
+    long_text = "раз два три четыре пять шесть семь восемь девять"
     uow = _FakeUoW(
-        [_job([_chunk(0)])], [_request([RequestItem("c0", "long")])]
+        [_job([_chunk(0)])], [_request([RequestItem("c0", long_text)])]
     )
-    sink = _FakeSink()
-    await _use_case(uow, sink).handle(
+    await _use_case(uow, _FakeSink()).handle(
         _result([_err("c0", EmbeddingErrorCode.TOKENS_EXCEEDED)])
     )
-    assert uow.jobs.store[_JOB_ID].status is JobStatus.FAILED
+
+    job = uow.jobs.store[_JOB_ID]
+    assert len(job.chunks) > 1
+    assert job.status is JobStatus.PARTIALLY_FAILED
+    # нулевой под-чанк переиспользует точку родителя — она не осиротеет
+    assert job.chunks[0].point_id == "p0"
+    assert {c.point_id for c in job.chunks} == {c.text_id for c in job.chunks}
+    # новая команда несёт ровно под-чанки, и вместе они дают исходный текст
+    retry = next(r for r in uow.requests.store.values() if r.attempt == 1)
+    assert [i.text_id for i in retry.items] == [c.text_id for c in job.chunks]
+    assert " ".join(i.text for i in retry.items) == long_text
+    assert len(uow.outbox.messages) == 1
+
+
+async def test_text_too_long_also_rechunks():
+    uow = _FakeUoW(
+        [_job([_chunk(0)])],
+        [_request([RequestItem("c0", "первый кусок второй кусок")])],
+    )
+    await _use_case(uow, _FakeSink()).handle(
+        _result([_err("c0", EmbeddingErrorCode.TEXT_TOO_LONG)])
+    )
+    assert len(uow.jobs.store[_JOB_ID].chunks) > 1
+
+
+async def test_rechunk_counts_towards_item_attempts():
+    """Под-чанки наследуют счётчик попыток — дробление не бесконечно."""
+    uow = _FakeUoW(
+        [_job([_chunk(0, attempts=1)])],
+        [_request([RequestItem("c0", "раз два три четыре")])],
+    )
+    await _use_case(uow, _FakeSink()).handle(
+        _result([_err("c0", EmbeddingErrorCode.TOKENS_EXCEEDED)])
+    )
+    assert all(c.attempts == 2 for c in uow.jobs.store[_JOB_ID].chunks)
+
+
+async def test_rechunk_exhausted_attempts_marks_failed():
+    uow = _FakeUoW(
+        [_job([_chunk(0, attempts=4)])],
+        [_request([RequestItem("c0", "раз два три четыре")])],
+    )
+    await _use_case(uow, _FakeSink(), max_item_attempts=5).handle(
+        _result([_err("c0", EmbeddingErrorCode.TOKENS_EXCEEDED)])
+    )
+    job = uow.jobs.store[_JOB_ID]
+    assert job.status is JobStatus.FAILED
+    assert len(job.chunks) == 1
+    assert uow.outbox.messages == []
+
+
+async def test_unsplittable_text_is_permanent():
+    """Дробить нечего — перманентный отказ, а не бесконечный rechunk."""
+    uow = _FakeUoW([_job([_chunk(0)])], [_request([RequestItem("c0", "я")])])
+    await _use_case(uow, _FakeSink()).handle(
+        _result([_err("c0", EmbeddingErrorCode.TOKENS_EXCEEDED)])
+    )
+    job = uow.jobs.store[_JOB_ID]
+    assert job.status is JobStatus.FAILED
+    assert len(job.chunks) == 1
     assert uow.outbox.messages == []
 
 
