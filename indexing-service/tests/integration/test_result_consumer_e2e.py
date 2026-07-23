@@ -152,6 +152,8 @@ async def test_generated_event_applies_to_qdrant_and_marks_done(
         _Clock(),
         expected_dim=4,
         max_item_attempts=5,
+        retry_backoff_s=5.0,
+        retry_backoff_cap_s=300.0,
     )
     parked: list = []
 
