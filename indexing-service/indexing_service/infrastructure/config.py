@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     outbox_batch_size: int = 100
     # Максимум попыток эмбеддинга одного чанка (INFERENCE_FAILED) до DLQ.
     max_item_attempts: int = 5
+    # Экспоненциальный backoff ретраев чанка: база и потолок задержки.
+    item_retry_backoff_s: float = 5.0
+    item_retry_backoff_cap_s: float = 300.0
     log_level: str = "INFO"
     # Наблюдаемость: OTLP-endpoint трейсинга (пусто = трейсинг выключен).
     otlp_endpoint: str | None = None

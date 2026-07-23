@@ -11,6 +11,7 @@ Rechunk для ``TOKENS_EXCEEDED``/``TEXT_TOO_LONG`` — отдельный сл
 """
 
 from dataclasses import replace
+from datetime import timedelta
 from uuid import uuid5
 
 from indexing_service.application.dto.chunk_write import ChunkWrite
@@ -50,12 +51,16 @@ class ApplyEmbeddingResult:
         *,
         expected_dim: int,
         max_item_attempts: int,
+        retry_backoff_s: float,
+        retry_backoff_cap_s: float,
     ) -> None:
         self._uow = uow
         self._sink = sink
         self._clock = clock
         self._expected_dim = expected_dim
         self._max_item_attempts = max_item_attempts
+        self._retry_backoff_s = retry_backoff_s
+        self._retry_backoff_cap_s = retry_backoff_cap_s
 
     async def handle(self, result: EmbeddingResult) -> None:
         """Обрабатывает событие-результат (идемпотентно)."""
@@ -135,13 +140,14 @@ class ApplyEmbeddingResult:
         attempt = request.attempt + 1
         items = tuple(retry_items)
         new_id = deterministic_request_id(job.job_id, attempt, items)
+        due_at = now + timedelta(seconds=self._backoff_seconds(attempt))
         retry = EmbeddingRequest(
             request_id=new_id,
             job_id=job.job_id,
             attempt=attempt,
             items=items,
             status=RequestStatus.PENDING,
-            next_attempt_at=None,
+            next_attempt_at=due_at,
             created_at=now,
             requested_at=None,
             received_at=None,
@@ -152,8 +158,14 @@ class ApplyEmbeddingResult:
             model=job.expected_model,
             message_id=uuid5(new_id.value, "outbox"),
             occurred_at=now,
+            next_attempt_at=due_at,
         )
         await uow.outbox.add_many([message])
+
+    def _backoff_seconds(self, attempt: int) -> float:
+        """Экспоненциальная задержка ретрая с потолком (§8, §10)."""
+        delay = self._retry_backoff_s * 2 ** (attempt - 1)
+        return min(delay, self._retry_backoff_cap_s)
 
     @staticmethod
     def _text_of(request: EmbeddingRequest, text_id: str) -> str:
