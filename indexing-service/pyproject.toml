@@ -19,13 +19,6 @@ dependencies = [
     "alembic>=1.13",
 ]
 
-[project.optional-dependencies]
-# Тяжёлый in-process эмбеддер (тянет torch) — опционально; за портом EmbeddingModel.
-# Для тестов и remote-режима не нужен.
-embedding = [
-    "FlagEmbedding>=1.3",
-]
-
 [dependency-groups]
 dev = [
     "pytest>=8",
@@ -74,8 +67,8 @@ extend-immutable-calls = [
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "qdrant_client".msg = "Векторное хранилище — только infrastructure."
 "faststream".msg = "Брокер — только infrastructure/presentation.messaging."
-"FlagEmbedding".msg = "Эмбеддер — только infrastructure.embedding."
-"fastembed".msg = "Эмбеддер — только infrastructure.embedding."
+"FlagEmbedding".msg = "Векторы считает embedding-service, не мы."
+"fastembed".msg = "Векторы считает embedding-service, не мы."
 "httpx".msg = "HTTP-клиент — только infrastructure."
 "fastapi".msg = "HTTP — только presentation.api."
 "pydantic".msg = "Pydantic — только presentation.schemas и infrastructure.config."
@@ -87,6 +80,8 @@ extend-immutable-calls = [
 "indexing_service/presentation/**" = ["TID251"]
 # Composition root легально пересекает слои (проводка адаптеров).
 "indexing_service/bootstrap.py" = ["TID251"]
+# Инструменты разработчика — не рантайм сервиса, слои им не писаны.
+"indexing_service/tools/**" = ["TID251"]
 "indexing_service/main.py" = ["TID251"]
 "alembic/**" = ["TID251"]
 "tests/**" = ["TID251"]

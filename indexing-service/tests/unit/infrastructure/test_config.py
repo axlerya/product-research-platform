@@ -1,17 +1,12 @@
 """Тесты настроек ``Settings`` (pydantic-settings, префикс INDEXING_)."""
 
-from indexing_service.infrastructure.config import (
-    EmbeddingMode,
-    Settings,
-    SourceMode,
-)
+from indexing_service.infrastructure.config import Settings, SourceMode
 
 
 def test_defaults():
     settings = Settings(_env_file=None)
     assert settings.collection_alias == "products"
     assert settings.default_currency == "RUB"
-    assert settings.embedding_mode is EmbeddingMode.LOCAL
     assert settings.source_mode is SourceMode.HYBRID
     assert settings.embedding_dim == 1024
     assert settings.max_attempts == 5
@@ -21,6 +16,11 @@ def test_defaults():
     assert settings.outbox_max_attempts == 10
     assert settings.outbox_batch_size == 100
     assert settings.max_item_attempts == 5
+    assert settings.item_retry_backoff_s == 5.0
+    assert settings.item_retry_backoff_cap_s == 300.0
+    assert settings.max_texts == 32
+    # Модель не закреплена: доверяем текущей модели embedding-service (Q3).
+    assert settings.expected_model is None
 
 
 def test_env_prefix_override(monkeypatch):
@@ -32,8 +32,11 @@ def test_env_prefix_override(monkeypatch):
 
 
 def test_enum_coercion_from_env(monkeypatch):
-    monkeypatch.setenv("INDEXING_EMBEDDING_MODE", "fake")
     monkeypatch.setenv("INDEXING_SOURCE_MODE", "event")
     settings = Settings(_env_file=None)
-    assert settings.embedding_mode is EmbeddingMode.FAKE
     assert settings.source_mode is SourceMode.EVENT
+
+
+def test_expected_model_can_be_pinned(monkeypatch):
+    monkeypatch.setenv("INDEXING_EXPECTED_MODEL", "BAAI/bge-m3")
+    assert Settings(_env_file=None).expected_model == "BAAI/bge-m3"

@@ -120,3 +120,44 @@ def test_generated_golden_sample_parses_into_dto():
     err = result.items[1]
     assert not err.is_ok
     assert err.error.code is EmbeddingErrorCode.TEXT_TOO_LONG
+
+
+def test_fake_embedding_service_speaks_the_real_contract():
+    """Заглушка для smoke обязана отвечать по настоящей схеме (§12, шаг 7).
+
+    Иначе локальный прогон конвейера «зелёный», а с реальным
+    embedding-service всё рассыпается.
+    """
+    from indexing_service.tools import fake_embedding_service as fake
+
+    request_id = str(UUID(int=7))
+    generated = {
+        "event_id": str(UUID(int=8)),
+        "event_type": "embedding.documents.generated.v1",
+        "event_version": "1.0",
+        "aggregate_type": "embedding_job",
+        "aggregate_id": request_id,
+        "occurred_at": "2026-07-24T10:00:00Z",
+        "producer": "embedding-service",
+        "data": {
+            "request_id": request_id,
+            "model_version": fake._MODEL_VERSION,
+            "dim": fake._DIM,
+            "results": [
+                fake._result_item({"text_id": "p0", "text": "Кружка"}),
+                fake._result_item({"text_id": "p1", "text": "  "}),
+            ],
+        },
+    }
+
+    validate(instance=generated, schema=_GENERATED_SCHEMA)
+    validate(instance=generated, schema=_ENVELOPE_SCHEMA)
+
+    result = parse_embedding_result(
+        EmbeddingEventEnvelope.model_validate(generated)
+    )
+    assert result.dim == fake._DIM
+    assert len(result.items[0].dense) == fake._DIM
+    assert result.items[0].is_ok
+    assert not result.items[1].is_ok
+    assert result.items[1].error.code is EmbeddingErrorCode.EMPTY_TEXT
