@@ -29,6 +29,7 @@ def _write(*, content_version: int = 3, dense=(0.1, 0.2), sparse=None):
         chunk_ix=0,
         content_version=content_version,
         aggregate_version=2,
+        content_hash="a" * 64,
         model_version="bge-m3@x|dim=2",
         dense=dense,
         sparse=sparse,
@@ -94,6 +95,7 @@ async def test_existing_point_is_merged_not_overwritten():
     assert client.ops == ["retrieve", "update_vectors", "set_payload"]
     fields = client.kwargs_of("set_payload")["payload"]
     assert fields["content_version"] == 3
+    assert fields["content_hash"] == "a" * 64
     assert "price" not in fields
     assert client.kwargs_of("set_payload")["points"] == [_POINT]
 
