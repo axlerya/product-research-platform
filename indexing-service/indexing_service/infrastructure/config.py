@@ -10,14 +10,6 @@ from enum import StrEnum
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class EmbeddingMode(StrEnum):
-    """Режим эмбеддера: in-process, внешний сервис или фейк для тестов."""
-
-    LOCAL = "local"
-    REMOTE = "remote"
-    FAKE = "fake"
-
-
 class SourceMode(StrEnum):
     """Источник данных на горячем пути (§13, тема 1)."""
 
@@ -50,11 +42,7 @@ class Settings(BaseSettings):
     catalog_base_url: str = "http://localhost:8000"
     # Домен.
     default_currency: str = "RUB"
-    # Эмбеддер (BGE-M3).
-    embedding_mode: EmbeddingMode = EmbeddingMode.LOCAL
-    embedding_model: str = "BAAI/bge-m3"
-    embedding_revision: str = ""
-    embedding_device: str = "cpu"
+    # Размерность векторов embedding-service (провижининг + валидация).
     embedding_dim: int = 1024
     # Источник данных на горячем пути.
     source_mode: SourceMode = SourceMode.HYBRID

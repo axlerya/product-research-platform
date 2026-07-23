@@ -2,22 +2,14 @@
 
 ``FakeVectorIndex`` хранит точки как payload + признак наличия векторов;
 водяной знак восстанавливается из payload (как реальный адаптер читает
-его из Qdrant). ``FakeEmbeddingModel`` детерминирован и не грузит модель.
+его из Qdrant). ``FakeUnitOfWork`` даёт транзакционную границу без БД.
 """
 
-import hashlib
 from datetime import UTC, datetime
 
 from indexing_service.application.dto.point import PointRecord, WatermarkEntry
 from indexing_service.domain.value_objects.content_hash import ContentHash
-from indexing_service.domain.value_objects.dense_vector import DenseVector
-from indexing_service.domain.value_objects.embedding import Embedding
-from indexing_service.domain.value_objects.embedding_model_id import (
-    EmbeddingModelId,
-)
 from indexing_service.domain.value_objects.identifiers import ProductId
-from indexing_service.domain.value_objects.search_text import SearchText
-from indexing_service.domain.value_objects.sparse_vector import SparseVector
 from indexing_service.domain.value_objects.watermark import IndexingWatermark
 
 _FALLBACK_TIME = datetime(2000, 1, 1, tzinfo=UTC)
@@ -119,31 +111,6 @@ class FakeVectorIndexAdmin:
 
     def writer(self, collection: str) -> FakeVectorIndex:
         return self.index
-
-
-class FakeEmbeddingModel:
-    """Детерминированный фейк ``EmbeddingModel`` (dim=4, без загрузки)."""
-
-    _MODEL = EmbeddingModelId("fake", "v1", "cls", normalized=True, dim=4)
-
-    def __init__(self) -> None:
-        self.calls = 0
-
-    @property
-    def model_id(self) -> EmbeddingModelId:
-        return self._MODEL
-
-    async def embed_documents(
-        self, texts: list[SearchText]
-    ) -> list[Embedding]:
-        self.calls += 1
-        return [self._embed(text) for text in texts]
-
-    def _embed(self, text: SearchText) -> Embedding:
-        digest = hashlib.sha256(text.value.encode("utf-8")).digest()
-        dense = DenseVector(tuple(digest[i] / 255.0 for i in range(4)))
-        sparse = SparseVector.from_mapping({1: 0.5, 2: 0.25})
-        return Embedding(dense=dense, sparse=sparse, model_id=self._MODEL)
 
 
 class FakeCatalogGateway:
