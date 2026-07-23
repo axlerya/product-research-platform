@@ -286,6 +286,64 @@ async def test_inference_failed_enqueues_retry():
     )
 
 
+class _SpyMetrics:
+    def __init__(self) -> None:
+        self.applied: list[bool] = []
+        self.finished: list[tuple[float, bool]] = []
+
+    def chunk_applied(self, *, applied: bool) -> None:
+        self.applied.append(applied)
+
+    def job_finished(self, *, latency_s: float, failed: bool) -> None:
+        self.finished.append((latency_s, failed))
+
+
+async def test_metrics_record_applied_chunks_and_job_latency():
+    uow = _FakeUoW(
+        [_job([_chunk(0)])], [_request([RequestItem("c0", "a")])]
+    )
+    metrics = _SpyMetrics()
+    use_case = ApplyEmbeddingResult(
+        uow,
+        _FakeSink(),
+        _Clock(),
+        expected_dim=3,
+        max_item_attempts=5,
+        retry_backoff_s=5.0,
+        retry_backoff_cap_s=300.0,
+        metrics=metrics,
+    )
+
+    await use_case.handle(_result([_ok("c0")]))
+
+    assert metrics.applied == [True]
+    # job создана в _NOW, применена в _APPLIED — ровно час
+    assert metrics.finished == [(3600.0, False)]
+
+
+async def test_metrics_not_reported_while_job_in_flight():
+    uow = _FakeUoW(
+        [_job([_chunk(0), _chunk(1)])],
+        [_request([RequestItem("c0", "a")])],
+    )
+    metrics = _SpyMetrics()
+    use_case = ApplyEmbeddingResult(
+        uow,
+        _FakeSink(),
+        _Clock(),
+        expected_dim=3,
+        max_item_attempts=5,
+        retry_backoff_s=5.0,
+        retry_backoff_cap_s=300.0,
+        metrics=metrics,
+    )
+
+    await use_case.handle(_result([_ok("c0")]))
+
+    assert metrics.applied == [True]
+    assert metrics.finished == []  # второй чанк ещё в работе
+
+
 async def test_retry_is_delayed_by_backoff():
     """Первый ретрай откладывается на базовую задержку (§8, §10)."""
     uow = _FakeUoW(

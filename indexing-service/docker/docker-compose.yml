@@ -84,16 +84,22 @@ services:
       retries: 20
 
   # Relay: outbox → exchange embedding.jobs (publisher confirms, SKIP LOCKED).
+  # Он же переснимает метрики отставания конвейера.
   relay:
     <<: *app-build
     environment: *app-env
+    ports:
+      - "8002:8000"
     depends_on:
       consumer:
         condition: service_healthy
     command:
-      - faststream
-      - run
+      - uvicorn
       - indexing_service.presentation.messaging.relay_app:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
 
   # Консюмер результатов: embedding.events → векторы в Qdrant, job → DONE.
   result-consumer:
