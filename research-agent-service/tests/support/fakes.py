@@ -4,6 +4,10 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from uuid import UUID
 
+from research_agent_service.application.dto.answer import (
+    AgentOutcome,
+    RateVerdict,
+)
 from research_agent_service.application.outbox_message import OutboxMessage
 from research_agent_service.domain.entities.agent_run import AgentRun
 from research_agent_service.domain.entities.conversation import Conversation
@@ -119,3 +123,43 @@ class FakeUnitOfWork:
 
     async def rollback(self) -> None:
         self.rolled_back = True
+
+
+class FakeRateLimiter:
+    """Rate limiter с заранее заданным вердиктом."""
+
+    def __init__(
+        self, *, allowed: bool = True, retry_after_s: float | None = None
+    ) -> None:
+        self._verdict = RateVerdict(
+            allowed=allowed, retry_after_s=retry_after_s
+        )
+
+    async def check(
+        self, key: str, *, limit: int, window_s: int
+    ) -> RateVerdict:
+        return self._verdict
+
+
+class FakeOrchestrator:
+    """Оркестратор с заранее заданным исходом или ошибкой."""
+
+    def __init__(
+        self,
+        *,
+        outcome: AgentOutcome | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self._outcome = outcome
+        self._error = error
+        self.history: tuple[object, ...] = ()
+
+    async def run(
+        self, query: object, history: tuple[object, ...], *, deadline_s: float
+    ) -> AgentOutcome:
+        self.history = history
+        if self._error is not None:
+            raise self._error
+        if self._outcome is None:
+            raise AssertionError("FakeOrchestrator без outcome и error")
+        return self._outcome
