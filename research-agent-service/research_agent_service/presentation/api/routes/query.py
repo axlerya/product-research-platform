@@ -1,7 +1,10 @@
 """POST /query — синхронный путь ответа (не зависит от RabbitMQ)."""
 
+import time
+
 from fastapi import APIRouter, Depends, Header
 
+from research_agent_service.application.exceptions import RateLimited
 from research_agent_service.presentation.api.dependencies import get_services
 from research_agent_service.presentation.api.services import ApiServices
 from research_agent_service.presentation.schemas.mappers import (
@@ -29,5 +32,19 @@ async def create_query(
         trace_id=x_trace_id,
         correlation_id=x_correlation_id,
     )
-    result = await services.answer_query.execute(command)
+    metrics = services.metrics
+    if metrics is not None:
+        metrics.run_started()
+    started = time.perf_counter()
+    try:
+        result = await services.answer_query.execute(command)
+    except RateLimited:
+        if metrics is not None:
+            metrics.rate_limited()
+        raise
+    finally:
+        if metrics is not None:
+            metrics.run_finished()
+    if metrics is not None:
+        metrics.observe_query(result, latency_s=time.perf_counter() - started)
     return answer_result_to_response(result)

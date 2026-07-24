@@ -1,8 +1,20 @@
 """Метрики Prometheus в изолированном CollectorRegistry."""
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 
-from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
+from prometheus_client import (
+    CONTENT_TYPE_LATEST,
+    CollectorRegistry,
+    Counter,
+    Gauge,
+    Histogram,
+    generate_latest,
+)
+
+from research_agent_service.application.dto.answer import AnswerQueryResult
+
+METRICS_CONTENT_TYPE = CONTENT_TYPE_LATEST
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,3 +67,71 @@ def build_metrics(registry: CollectorRegistry) -> Metrics:
             registry=registry,
         ),
     )
+
+
+class MetricsRecorder:
+    """Запись метрик пути запроса и отдача /metrics из своего реестра."""
+
+    def __init__(
+        self,
+        *,
+        registry: CollectorRegistry,
+        metrics: Metrics,
+        model: str,
+    ) -> None:
+        self._registry = registry
+        self._metrics = metrics
+        self._model = model
+
+    @classmethod
+    def create(cls, *, model: str = "agent") -> "MetricsRecorder":
+        """Строит рекордер с собственным реестром."""
+        registry = CollectorRegistry()
+        return cls(
+            registry=registry,
+            metrics=build_metrics(registry),
+            model=model,
+        )
+
+    def run_started(self) -> None:
+        """Отмечает начало прогона (gauge активных прогонов)."""
+        self._metrics.active_runs.inc()
+
+    def run_finished(self) -> None:
+        """Отмечает завершение прогона."""
+        self._metrics.active_runs.dec()
+
+    def rate_limited(self) -> None:
+        """Считает отклонение по rate limit."""
+        self._metrics.rate_limited_total.inc()
+
+    def observe_query(
+        self, result: AnswerQueryResult, *, latency_s: float
+    ) -> None:
+        """Пишет латентность, токены, инструменты и деградации прогона."""
+        self._metrics.query_seconds.labels(status=result.status.value).observe(
+            latency_s
+        )
+        self._observe_tokens(result)
+        for tool in result.used_tools:
+            self._metrics.tool_calls_total.labels(
+                tool=tool.value, status="used"
+            ).inc()
+        for degradation in result.degradations:
+            self._metrics.degradations_total.labels(
+                dependency=degradation.dependency
+            ).inc()
+
+    def _observe_tokens(self, result: AnswerQueryResult) -> None:
+        pairs: Iterable[tuple[str, int]] = (
+            ("prompt", result.usage.prompt_tokens),
+            ("completion", result.usage.completion_tokens),
+        )
+        for kind, amount in pairs:
+            self._metrics.llm_tokens_total.labels(
+                model=self._model, kind=kind
+            ).inc(amount)
+
+    def render(self) -> bytes:
+        """Сериализует реестр в текстовый формат Prometheus."""
+        return generate_latest(self._registry)

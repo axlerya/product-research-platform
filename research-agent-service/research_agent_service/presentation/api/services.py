@@ -17,16 +17,20 @@ from research_agent_service.application.use_cases.read_queries import (
 from research_agent_service.application.use_cases.submit_feedback import (
     SubmitFeedbackUseCase,
 )
+from research_agent_service.infrastructure.observability.metrics import (
+    MetricsRecorder,
+)
 
 ReadinessProbe = Callable[[], Awaitable[bool]]
 
 
 @dataclass(frozen=True, slots=True)
 class ApiServices:
-    """Use cases и проба готовности, доступные маршрутам."""
+    """Use cases, проба готовности и запись метрик, доступные маршрутам."""
 
     answer_query: AnswerQueryUseCase
     submit_feedback: SubmitFeedbackUseCase
     list_queries: ListQueriesUseCase
     get_query: GetQueryUseCase
     readiness: ReadinessProbe
+    metrics: MetricsRecorder | None = None

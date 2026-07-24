@@ -60,6 +60,9 @@ from research_agent_service.infrastructure.grpc.embedding_client import (
 from research_agent_service.infrastructure.grpc.reranker_client import (
     GrpcRerankerClient,
 )
+from research_agent_service.infrastructure.observability.metrics import (
+    MetricsRecorder,
+)
 from research_agent_service.infrastructure.qdrant.vector_search import (
     QdrantVectorSearch,
 )
@@ -166,6 +169,7 @@ class Container:
             list_queries=ListQueriesUseCase(uow=uow),
             get_query=GetQueryUseCase(uow=uow),
             readiness=self._readiness,
+            metrics=MetricsRecorder.create(model=settings.llm.model),
         )
 
     async def _readiness(self) -> bool:
