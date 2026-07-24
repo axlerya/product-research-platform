@@ -5,6 +5,7 @@
 
 from typing import Protocol
 
+from research_agent_service.application.dto.catalog import CatalogFetch
 from research_agent_service.application.dto.price_analysis import (
     MarginBandSpec,
     PriceAnalysisResult,
@@ -14,6 +15,10 @@ from research_agent_service.application.dto.price_analysis import (
 
 class CatalogPort(Protocol):
     """Доступ к catalog-service для актуальных данных и ценового анализа."""
+
+    async def get_products_by_skus(self, skus: tuple[str, ...]) -> CatalogFetch:
+        """Batch-чтение авторитетных товаров; иначе CatalogUnavailable."""
+        ...
 
     async def analyze_prices(
         self,
