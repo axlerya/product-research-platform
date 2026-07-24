@@ -9,6 +9,7 @@ import hashlib
 from collections.abc import Iterable
 from dataclasses import replace
 from datetime import datetime
+from uuid import UUID
 
 from research_agent_service.application.dto.answer import (
     AgentOutcome,
@@ -24,6 +25,7 @@ from research_agent_service.application.exceptions import (
     RateLimited,
 )
 from research_agent_service.application.outbox_message import OutboxMessage
+from research_agent_service.application.ports.cache import CachePort
 from research_agent_service.application.ports.clock import Clock
 from research_agent_service.application.ports.id_generator import IdGenerator
 from research_agent_service.application.ports.orchestrator import (
@@ -63,6 +65,7 @@ _RATE_LIMIT = 60
 _RATE_WINDOW_S = 60
 _HISTORY_LIMIT = 10
 _ERROR_MESSAGE_MAX = 500
+_IDEMPOTENCY_TTL_S = 86400
 
 
 def _query_hash(text: str) -> str:
@@ -88,6 +91,8 @@ class AnswerQueryUseCase:
         policy: AgentLoopPolicy = DEFAULT_AGENT_LOOP_POLICY,
         model: str = "claude-opus-4-8",
         prompt_version: str = "v1",
+        cache: CachePort | None = None,
+        idempotency_ttl_s: int = _IDEMPOTENCY_TTL_S,
     ) -> None:
         self._uow = uow
         self._orchestrator = orchestrator
@@ -98,6 +103,8 @@ class AnswerQueryUseCase:
         self._policy = policy
         self._model = model
         self._prompt_version = prompt_version
+        self._cache = cache
+        self._idempotency_ttl_s = idempotency_ttl_s
 
     async def execute(self, command: AnswerQueryCommand) -> AnswerQueryResult:
         """Обрабатывает запрос и возвращает структурированный ответ."""
@@ -109,6 +116,10 @@ class AnswerQueryUseCase:
         )
         if not verdict.allowed:
             raise RateLimited(retry_after_s=verdict.retry_after_s)
+
+        replayed = await self._replay(command)
+        if replayed is not None:
+            return replayed
 
         query_hash = _query_hash(command.query.text)
         conversation, history, is_new = await self._resolve_conversation(
@@ -135,7 +146,7 @@ class AnswerQueryUseCase:
             )
             raise QueryFailed(run.id) from exc
 
-        return await self._finalize_completed(
+        result = await self._finalize_completed(
             conversation,
             is_new,
             user_message,
@@ -144,6 +155,70 @@ class AnswerQueryUseCase:
             query_hash,
             started,
         )
+        await self._remember(command, result)
+        return result
+
+    async def _replay(
+        self, command: AnswerQueryCommand
+    ) -> AnswerQueryResult | None:
+        """Возвращает прежний результат по idempotency_key (или None)."""
+        key = self._idempotency_key(command)
+        if key is None:
+            return None
+        cached = await self._cache.get(key)
+        if cached is None:
+            return None
+        run_id = AgentRunId(UUID(cached))
+        async with self._uow as uow:
+            run = await uow.agent_runs.get(run_id)
+            if run is None or run.answer_message_id is None:
+                return None
+            message = await uow.conversations.get_message(run.answer_message_id)
+        if message is None:
+            return None
+        return self._result_from_run(run, message)
+
+    async def _remember(
+        self, command: AnswerQueryCommand, result: AnswerQueryResult
+    ) -> None:
+        """Запоминает id прогона под idempotency_key для повторов."""
+        key = self._idempotency_key(command)
+        if key is None:
+            return
+        await self._cache.set(
+            key,
+            str(result.agent_run_id.value),
+            ttl_s=self._idempotency_ttl_s,
+        )
+
+    def _idempotency_key(self, command: AnswerQueryCommand) -> str | None:
+        if self._cache is None or command.query.idempotency_key is None:
+            return None
+        return (
+            f"idem:{command.client_principal}:{command.query.idempotency_key}"
+        )
+
+    def _result_from_run(
+        self, run: AgentRun, answer: Message
+    ) -> AnswerQueryResult:
+        # Реплеятся только завершённые прогоны (answer_message_id задан),
+        # поэтому finished_at гарантированно проставлен (datetime, не None).
+        return AnswerQueryResult(
+            agent_run_id=run.id,
+            conversation_id=run.conversation_id,
+            status=run.status,
+            answer=answer.content,
+            citations=answer.citations,
+            used_tools=self._used_tools(run),
+            confidence=run.confidence,
+            degradations=run.degradations,
+            usage=run.usage,
+            latency_ms=_latency_ms(run.started_at, run.finished_at),
+        )
+
+    @staticmethod
+    def _used_tools(run: AgentRun) -> tuple:
+        return tuple(dict.fromkeys(call.tool for call in run.tool_calls))
 
     def _new_run(
         self,
