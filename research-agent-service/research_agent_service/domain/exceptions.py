@@ -9,6 +9,10 @@ class InvalidCitation(DomainError):
     """Некорректный источник факта (citation)."""
 
 
+class InvalidCurrency(DomainError):
+    """Некорректный код валюты."""
+
+
 class InvalidQuery(DomainError):
     """Некорректный запрос пользователя или его фильтры."""
 
