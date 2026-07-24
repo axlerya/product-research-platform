@@ -11,3 +11,5 @@ coverage.xml
 htmlcov
 *.egg-info
 .env
+*.md
+tests
