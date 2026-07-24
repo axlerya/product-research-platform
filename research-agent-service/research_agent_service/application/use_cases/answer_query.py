@@ -7,6 +7,7 @@ Agent run, tool calls и событие сохраняются в ОДНОЙ т�
 
 import hashlib
 from collections.abc import Iterable
+from dataclasses import replace
 from datetime import datetime
 
 from research_agent_service.application.dto.answer import (
@@ -240,7 +241,7 @@ class AnswerQueryUseCase:
             token_count=outcome.usage.completion_tokens,
         )
         for tool_call in outcome.tool_calls:
-            run.record_tool_call(tool_call)
+            run.record_tool_call(replace(tool_call, agent_run_id=run.id))
         run.complete(
             answer_message_id=answer_message.id,
             usage=outcome.usage,
