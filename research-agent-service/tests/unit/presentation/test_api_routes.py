@@ -23,6 +23,9 @@ from research_agent_service.domain.value_objects.identifiers import (
     MessageId,
 )
 from research_agent_service.domain.value_objects.usage import TokenUsage
+from research_agent_service.infrastructure.observability.metrics import (
+    MetricsRecorder,
+)
 from research_agent_service.presentation.api.app import create_app
 from research_agent_service.presentation.api.services import ApiServices
 
@@ -115,6 +118,7 @@ def _client(
     list_queries=None,
     get_query=None,
     ready=True,
+    metrics=None,
 ) -> TestClient:
     async def _readiness() -> bool:
         return ready
@@ -125,6 +129,7 @@ def _client(
         list_queries=list_queries or _FakeListQueries(),
         get_query=get_query or _FakeGetQuery(),
         readiness=_readiness,
+        metrics=metrics,
     )
     return TestClient(create_app(services))
 
@@ -259,3 +264,33 @@ def test_ready_reflects_probe(ready: bool, code: int) -> None:
     """GET /ready отражает пробу готовности."""
     response = _client(ready=ready).get("/ready")
     assert response.status_code == code
+
+
+def test_query_records_metrics_and_metrics_endpoint() -> None:
+    """Успешный запрос пишет метрики, /metrics их отдаёт."""
+    recorder = MetricsRecorder.create(model="qwen3")
+    client = _client(metrics=recorder)
+
+    assert client.post("/query", json={"text": "вопрос"}).status_code == 200
+
+    dump = client.get("/metrics")
+    assert dump.status_code == 200
+    assert "research_agent_query_seconds" in dump.text
+    assert "research_agent_active_runs" in dump.text
+
+
+def test_rate_limited_records_metric() -> None:
+    """Отклонение по лимиту увеличивает счётчик и остаётся 429."""
+    recorder = MetricsRecorder.create()
+    answer = _FakeAnswerQuery(error=RateLimited(retry_after_s=1.0))
+    client = _client(answer_query=answer, metrics=recorder)
+
+    assert client.post("/query", json={"text": "q"}).status_code == 429
+    assert (
+        "research_agent_rate_limited_total 1.0" in client.get("/metrics").text
+    )
+
+
+def test_metrics_endpoint_absent_without_recorder() -> None:
+    """Без подключённой записи метрик /metrics отвечает 404."""
+    assert _client().get("/metrics").status_code == 404
