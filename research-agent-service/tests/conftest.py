@@ -1,4 +1,4 @@
-"""Фикстуры интеграционных тестов: PostgreSQL в контейнере."""
+"""Общие фикстуры контейнеров (Postgres/RabbitMQ) для всех тестов."""
 
 from collections.abc import AsyncIterator, Iterator
 
