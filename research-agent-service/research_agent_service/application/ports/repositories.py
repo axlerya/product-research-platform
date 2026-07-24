@@ -10,6 +10,7 @@ from research_agent_service.domain.value_objects.enums import RunStatus
 from research_agent_service.domain.value_objects.identifiers import (
     AgentRunId,
     ConversationId,
+    MessageId,
 )
 
 
@@ -26,6 +27,10 @@ class ConversationRepository(Protocol):
 
     async def add_message(self, message: Message) -> None:
         """Добавляет сообщение в диалог."""
+        ...
+
+    async def get_message(self, message_id: MessageId) -> Message | None:
+        """Возвращает сообщение по id (или None)."""
         ...
 
     async def load_history(
