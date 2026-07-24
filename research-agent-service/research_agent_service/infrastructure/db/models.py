@@ -33,7 +33,9 @@ class MessageORM(Base):
 
     id: Mapped[UUID] = mapped_column(_uuid, primary_key=True)
     conversation_id: Mapped[UUID] = mapped_column(
-        _uuid, ForeignKey("conversations.id"), index=True
+        _uuid,
+        ForeignKey("conversations.id", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     role: Mapped[str] = mapped_column(String(16))
     content: Mapped[str] = mapped_column(Text)
@@ -50,7 +52,9 @@ class AgentRunORM(Base):
 
     id: Mapped[UUID] = mapped_column(_uuid, primary_key=True)
     conversation_id: Mapped[UUID] = mapped_column(
-        _uuid, ForeignKey("conversations.id"), index=True
+        _uuid,
+        ForeignKey("conversations.id", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     query_message_id: Mapped[UUID] = mapped_column(_uuid)
     answer_message_id: Mapped[UUID | None] = mapped_column(_uuid)
@@ -79,7 +83,9 @@ class ToolCallORM(Base):
 
     id: Mapped[UUID] = mapped_column(_uuid, primary_key=True)
     agent_run_id: Mapped[UUID] = mapped_column(
-        _uuid, ForeignKey("agent_runs.id"), index=True
+        _uuid,
+        ForeignKey("agent_runs.id", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     step_index: Mapped[int] = mapped_column(Integer)
     tool: Mapped[str] = mapped_column(String(32))
@@ -100,10 +106,13 @@ class FeedbackORM(Base):
 
     id: Mapped[UUID] = mapped_column(_uuid, primary_key=True)
     agent_run_id: Mapped[UUID] = mapped_column(
-        _uuid, ForeignKey("agent_runs.id"), index=True
+        _uuid,
+        ForeignKey("agent_runs.id", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     conversation_id: Mapped[UUID] = mapped_column(
-        _uuid, ForeignKey("conversations.id")
+        _uuid,
+        ForeignKey("conversations.id", deferrable=True, initially="DEFERRED"),
     )
     rating: Mapped[str] = mapped_column(String(8))
     reason: Mapped[str | None] = mapped_column(Text)
