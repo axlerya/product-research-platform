@@ -1,0 +1,169 @@
+[project]
+name = "research-agent-service"
+version = "0.1.0"
+description = "Агент-исследователь товаров: FastAPI + LangGraph, синхронный retrieval, надёжные события (Transactional Outbox)"
+requires-python = ">=3.12"
+# Рантайм-зависимости добавляются по мере фич (Clean Architecture: домен —
+# только stdlib). LangChain/LangGraph, Qdrant, Redis, gRPC, FastAPI и пр.
+# подключаются в тех PR, где появляется соответствующий адаптер.
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5",
+    "pytest-randomly>=3.15",
+    "ruff>=0.13",
+    "import-linter>=2.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["research_agent_service"]
+
+# --- Линт/формат ---
+[tool.ruff]
+target-version = "py312"
+# Google Python Style Guide — максимум 80 символов в строке.
+line-length = 80
+# Markdown-доки (ARCHITECTURE.md и пр.) — не исходный код: примеры в них
+# намеренно компактны, ruff их не форматирует и не линтует.
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+# E/F — pyflakes+pycodestyle, I — isort, UP — pyupgrade, B — bugbear,
+# TID — запрет «чужих» импортов по слоям, ASYNC, RUF — ruff-специфичные.
+select = ["E", "F", "I", "UP", "B", "TID", "ASYNC", "RUF"]
+# RUF001-003 — «неоднозначные» кириллические символы: проект русскоязычный,
+# докстринги и комментарии на русском намеренно.
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.flake8-bugbear]
+# DI-идиома FastStream/FastAPI: вызов Context/Depends в дефолтах аргументов
+# обязателен фреймворком — это не мутабельный дефолт (B008).
+extend-immutable-calls = [
+    "faststream.Context",
+    "faststream.Depends",
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Path",
+]
+
+# Правило зависимостей на уровне импортов: точные top-level имена (glob не
+# поддерживается). Домену/приложению фреймворки недоступны; см. import-linter.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"langgraph".msg = "Оркестрация LLM — только infrastructure.agent."
+"langchain_core".msg = "LangChain — только infrastructure.agent."
+"langchain_anthropic".msg = "LLM-SDK — только infrastructure.agent."
+"anthropic".msg = "LLM-SDK — только infrastructure.agent."
+"tavily".msg = "Web-search SDK — только infrastructure.websearch."
+"qdrant_client".msg = "Векторное хранилище — только infrastructure.qdrant."
+"redis".msg = "Redis — только infrastructure.redis."
+"grpc".msg = "gRPC-клиент — только infrastructure.grpc."
+"httpx".msg = "HTTP-клиент — только infrastructure."
+"faststream".msg = "Брокер — только infrastructure/presentation.messaging."
+"fastapi".msg = "HTTP — только presentation.api."
+"pydantic".msg = "Pydantic — presentation.schemas, infrastructure.config, infrastructure.agent."
+"sqlalchemy".msg = "ORM — только infrastructure.db и alembic."
+
+[tool.ruff.lint.per-file-ignores]
+# Инфраструктуре, presentation и тестам можно фреймворки/клиенты.
+"research_agent_service/infrastructure/**" = ["TID251"]
+"research_agent_service/presentation/**" = ["TID251"]
+# Composition root легально пересекает слои (проводка адаптеров).
+"research_agent_service/bootstrap.py" = ["TID251"]
+"research_agent_service/main.py" = ["TID251"]
+"alembic/**" = ["TID251"]
+"tests/**" = ["TID251"]
+
+# --- Тесты ---
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+addopts = "--strict-markers"
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "integration: требует Postgres/RabbitMQ/Qdrant/Redis (testcontainers)",
+    "contract: контрактные тесты событий/схем/gRPC",
+    "e2e: сквозной прогон query-path со стаб-LLM",
+    "slow: длительные (red-team, реальные модели)",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["research_agent_service"]
+# Composition root и runtime-обвязка (проводка/запуск) проверяются e2e и через
+# docker-compose, а не unit-тестами.
+omit = [
+    "research_agent_service/__main__.py",
+    "research_agent_service/main.py",
+    "research_agent_service/bootstrap.py",
+    "research_agent_service/presentation/messaging/relay_app.py",
+    "research_agent_service/presentation/api/app.py",
+    "research_agent_service/presentation/cli/*",
+]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+
+# --- Правило зависимостей Clean Architecture (исполняемый инвариант) ---
+[tool.importlinter]
+root_package = "research_agent_service"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "domain не знает фреймворков и внешних слоёв"
+type = "forbidden"
+source_modules = ["research_agent_service.domain"]
+forbidden_modules = [
+    "langgraph",
+    "langchain_core",
+    "langchain_anthropic",
+    "anthropic",
+    "tavily",
+    "qdrant_client",
+    "redis",
+    "grpc",
+    "httpx",
+    "faststream",
+    "fastapi",
+    "pydantic",
+    "sqlalchemy",
+    "asyncpg",
+    "alembic",
+]
+
+[[tool.importlinter.contracts]]
+name = "application не знает фреймворков"
+type = "forbidden"
+source_modules = ["research_agent_service.application"]
+forbidden_modules = [
+    "langgraph",
+    "langchain_core",
+    "langchain_anthropic",
+    "anthropic",
+    "tavily",
+    "qdrant_client",
+    "redis",
+    "grpc",
+    "httpx",
+    "faststream",
+    "fastapi",
+    "pydantic",
+    "sqlalchemy",
+    "asyncpg",
+    "alembic",
+]
+
+[[tool.importlinter.contracts]]
+name = "слои направлены внутрь (application -> domain)"
+type = "layers"
+layers = [
+    "research_agent_service.application",
+    "research_agent_service.domain",
+]
