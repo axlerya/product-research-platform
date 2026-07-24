@@ -8,6 +8,8 @@ requires-python = ">=3.12"
 # подключаются в тех PR, где появляется соответствующий адаптер.
 dependencies = [
     "asyncpg>=0.29",
+    "grpcio>=1.66",
+    "grpcio-health-checking>=1.66",
     "httpx>=0.27",
     "langchain-openai>=0.2",
     "prometheus-client>=0.25",
@@ -28,6 +30,7 @@ dev = [
     "import-linter>=2.1",
     "testcontainers[postgresql]>=4.14",
     "psycopg2-binary>=2.9",
+    "grpcio-tools>=1.66",
 ]
 
 [build-system]
@@ -43,7 +46,7 @@ target-version = "py312"
 # Google Python Style Guide — максимум 80 символов в строке.
 line-length = 80
 # Markdown — не исходный код: ruff его не форматирует и не линтует.
-extend-exclude = ["*.md"]
+extend-exclude = ["*.md", "**/_generated/**"]
 
 [tool.ruff.lint]
 # E/F — pyflakes+pycodestyle, I — isort, UP — pyupgrade, B — bugbear,
@@ -110,6 +113,7 @@ source = ["research_agent_service"]
 # Composition root и runtime-обвязка (проводка/запуск) проверяются e2e и через
 # docker-compose, а не unit-тестами.
 omit = [
+    "research_agent_service/infrastructure/grpc/_generated/*",
     "research_agent_service/__main__.py",
     "research_agent_service/main.py",
     "research_agent_service/bootstrap.py",
