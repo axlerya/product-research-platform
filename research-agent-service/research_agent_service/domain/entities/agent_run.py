@@ -87,6 +87,54 @@ class AgentRun:
         self.error: RunError | None = None
         self.tool_calls: list[ToolCall] = []
 
+    @classmethod
+    def reconstitute(
+        cls,
+        *,
+        id: AgentRunId,
+        conversation_id: ConversationId,
+        query_message_id: MessageId,
+        model: str,
+        prompt_version: str,
+        status: RunStatus,
+        started_at: datetime,
+        finished_at: datetime | None,
+        usage: TokenUsage,
+        loop_steps: int,
+        confidence: Confidence | None,
+        answer_message_id: MessageId | None,
+        degradations: tuple[Degradation, ...],
+        error: RunError | None,
+        tool_calls: tuple[ToolCall, ...],
+        client_principal: str | None,
+        idempotency_key: str | None,
+        trace_id: str | None,
+        correlation_id: str | None,
+    ) -> "AgentRun":
+        """Восстанавливает прогон из хранилища (минуя жизненный цикл)."""
+        run = cls(
+            id=id,
+            conversation_id=conversation_id,
+            query_message_id=query_message_id,
+            model=model,
+            prompt_version=prompt_version,
+            started_at=started_at,
+            client_principal=client_principal,
+            idempotency_key=idempotency_key,
+            trace_id=trace_id,
+            correlation_id=correlation_id,
+        )
+        run.status = status
+        run.finished_at = finished_at
+        run.usage = usage
+        run.loop_steps = loop_steps
+        run.confidence = confidence
+        run.answer_message_id = answer_message_id
+        run.degradations = degradations
+        run.error = error
+        run.tool_calls = list(tool_calls)
+        return run
+
     @property
     def tool_call_count(self) -> int:
         """Число вызовов инструментов в прогоне."""
