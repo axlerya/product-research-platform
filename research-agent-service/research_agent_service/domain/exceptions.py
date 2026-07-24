@@ -19,3 +19,7 @@ class EmptyQuery(InvalidQuery):
 
 class QueryTooLong(InvalidQuery):
     """Запрос превышает лимит длины."""
+
+
+class RunAlreadyFinalized(DomainError):
+    """Попытка изменить прогон, уже находящийся в терминальном статусе."""
