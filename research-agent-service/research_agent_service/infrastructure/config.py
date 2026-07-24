@@ -44,6 +44,20 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     rabbitmq_dsn: str = "amqp://guest:guest@localhost:5672/"
 
+    embedding_grpc_target: str = "localhost:50051"
+    reranker_grpc_target: str = "localhost:50051"
+    qdrant_url: str = "http://localhost:6333"
+    qdrant_collection: str = "products"
+    catalog_base_url: str = "http://localhost:8080"
+
+    # Провайдер web-поиска: "tavily" | "serper".
+    web_search_provider: str = "tavily"
+    web_search_api_key: str = ""
+
+    # Relay outbox: период дренажа и размер партии.
+    relay_interval_s: float = 1.0
+    relay_batch_size: int = 100
+
     llm: LlmSettings = LlmSettings()
 
     # Пусто = distributed tracing выключен.
