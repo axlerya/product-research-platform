@@ -1,5 +1,11 @@
-"""SqlAlchemyUnitOfWork — атомарная транзакция с репозиториями."""
+"""SqlAlchemyUnitOfWork — атомарная транзакция с репозиториями.
 
+Сессия хранится в ContextVar, а не на экземпляре: один UnitOfWork безопасно
+делится между конкурентными запросами (каждая async-задача видит свою
+сессию). Репозитории — свойства, привязанные к сессии текущего контекста.
+"""
+
+from contextvars import ContextVar
 from types import TracebackType
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -25,15 +31,12 @@ class SqlAlchemyUnitOfWork:
         self, *, session_factory: async_sessionmaker[AsyncSession]
     ) -> None:
         self._session_factory = session_factory
-        self._session: AsyncSession | None = None
+        self._session: ContextVar[AsyncSession | None] = ContextVar(
+            "uow_session", default=None
+        )
 
     async def __aenter__(self) -> "SqlAlchemyUnitOfWork":
-        session = self._session_factory()
-        self._session = session
-        self.conversations = SqlAlchemyConversationRepository(session)
-        self.agent_runs = SqlAlchemyAgentRunRepository(session)
-        self.feedback = SqlAlchemyFeedbackRepository(session)
-        self.outbox = SqlAlchemyOutboxRepository(session)
+        self._session.set(self._session_factory())
         return self
 
     async def __aexit__(
@@ -48,7 +51,23 @@ class SqlAlchemyUnitOfWork:
                 await session.rollback()
         finally:
             await session.close()
-            self._session = None
+            self._session.set(None)
+
+    @property
+    def conversations(self) -> SqlAlchemyConversationRepository:
+        return SqlAlchemyConversationRepository(self._require_session())
+
+    @property
+    def agent_runs(self) -> SqlAlchemyAgentRunRepository:
+        return SqlAlchemyAgentRunRepository(self._require_session())
+
+    @property
+    def feedback(self) -> SqlAlchemyFeedbackRepository:
+        return SqlAlchemyFeedbackRepository(self._require_session())
+
+    @property
+    def outbox(self) -> SqlAlchemyOutboxRepository:
+        return SqlAlchemyOutboxRepository(self._require_session())
 
     async def commit(self) -> None:
         await self._require_session().commit()
@@ -57,6 +76,7 @@ class SqlAlchemyUnitOfWork:
         await self._require_session().rollback()
 
     def _require_session(self) -> AsyncSession:
-        if self._session is None:
+        session = self._session.get()
+        if session is None:
             raise RuntimeError("UnitOfWork не открыт")
-        return self._session
+        return session
