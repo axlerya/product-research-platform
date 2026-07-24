@@ -1,0 +1,18 @@
+# Оверлей стенда без GPU: те же модели считаются на CPU.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.cpu.yml up -d --build
+#
+# Медленнее в разы: дедлайн gRPC-эмбеддинга запроса (1.5 с) и бюджет прогона
+# агента (25 с) на CPU куда ближе к границе, чем на GPU.
+services:
+  embedding:
+    build:
+      dockerfile: docker/Dockerfile.cpu
+    environment:
+      EMBEDDING_DEVICE: cpu
+      EMBEDDING_PRECISION: fp32
+      RERANKER_DEVICE: cpu
+      RERANKER_PRECISION: fp32
+    # !reset — единственный способ убрать секцию из базового файла: обычное
+    # слияние списки не затирает, и резервирование GPU осталось бы в силе.
+    deploy: !reset null
