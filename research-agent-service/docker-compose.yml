@@ -1,0 +1,94 @@
+# Локальный запуск research-agent-service + его инфраструктура
+# (Postgres/Redis/RabbitMQ). Внешние сервисы (embedding, catalog, Qdrant, LLM)
+# подключаются по адресам из окружения и должны быть доступны в сети.
+#   docker compose up --build
+name: research-agent-service
+
+x-agent-env: &agent-env
+  RESEARCH_AGENT_DATABASE_URL: postgresql+asyncpg://research_agent:research_agent@postgres:5432/research_agent
+  RESEARCH_AGENT_REDIS_URL: redis://redis:6379/0
+  RESEARCH_AGENT_RABBITMQ_DSN: amqp://guest:guest@rabbitmq:5672/
+  RESEARCH_AGENT_EMBEDDING_GRPC_TARGET: embedding-service:50051
+  RESEARCH_AGENT_RERANKER_GRPC_TARGET: embedding-service:50051
+  RESEARCH_AGENT_QDRANT_URL: http://qdrant:6333
+  RESEARCH_AGENT_CATALOG_BASE_URL: http://catalog-service:8080
+  RESEARCH_AGENT_LLM__BASE_URL: http://llm:8001/v1
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: research_agent
+      POSTGRES_PASSWORD: research_agent
+      POSTGRES_DB: research_agent
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U research_agent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [agent]
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [agent]
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # management UI
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [agent]
+
+  # API: синхронный путь запроса. Единственная роль с миграциями.
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    environment:
+      <<: *agent-env
+      RUN_MIGRATIONS: "1"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks: [agent]
+
+  # Relay: дренаж outbox в RabbitMQ (отдельный процесс от API).
+  relay:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command:
+      - faststream
+      - run
+      - research_agent_service.presentation.messaging.relay_app:app
+    environment:
+      <<: *agent-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks: [agent]
+
+networks:
+  agent:
