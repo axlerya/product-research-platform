@@ -38,6 +38,7 @@ dev = [
     "testcontainers[postgresql]>=4.14",
     "psycopg2-binary>=2.9",
     "grpcio-tools>=1.66",
+    "jsonschema>=4.20",
 ]
 
 [build-system]
