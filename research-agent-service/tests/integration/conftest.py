@@ -5,6 +5,8 @@ from collections.abc import AsyncIterator, Iterator
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from testcontainers.core.container import DockerContainer
+from testcontainers.core.waiting_utils import wait_for_logs
 from testcontainers.postgres import PostgresContainer
 
 from research_agent_service.infrastructure.db import models  # noqa: F401
@@ -21,6 +23,24 @@ def postgres_url() -> Iterator[str]:
     with PostgresContainer("postgres:16-alpine") as container:
         url = container.get_connection_url()
         yield url.replace("+psycopg2", "+asyncpg")
+
+
+@pytest.fixture(scope="session")
+def rabbitmq_url() -> Iterator[str]:
+    """Поднимает RabbitMQ в контейнере, отдаёт AMQP-URL.
+
+    Ждём лог «Server startup complete» вместо flaky pika-пробы: async-клиент
+    (aio-pika) подключается уже к готовому брокеру.
+    """
+    container = DockerContainer("rabbitmq:3.13").with_exposed_ports(5672)
+    container.start()
+    try:
+        wait_for_logs(container, "Server startup complete", timeout=120)
+        host = container.get_container_host_ip()
+        port = container.get_exposed_port(5672)
+        yield f"amqp://guest:guest@{host}:{port}/"
+    finally:
+        container.stop()
 
 
 @pytest_asyncio.fixture
