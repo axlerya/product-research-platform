@@ -74,6 +74,12 @@ class DuplicateSku(ConflictError):
     code = "duplicate_sku"
 
 
+class MixedCurrencySlice(ConflictError):
+    """Срез для ценового анализа содержит больше одной валюты."""
+
+    code = "mixed_currency_slice"
+
+
 class ValidationError(CatalogError):
     """Значение не прошло доменную валидацию (HTTP 422)."""
 

@@ -12,6 +12,7 @@ from catalog_service.application.ports.read_models import (
     ProductQueryService,
     ReferenceQueryService,
 )
+from catalog_service.application.price_analysis import AnalyzePrices
 from catalog_service.application.use_cases.create_product import CreateProduct
 from catalog_service.application.use_cases.delete_product import DeleteProduct
 from catalog_service.application.use_cases.set_stock import SetStock
@@ -70,9 +71,14 @@ def get_reference_query_service() -> ReferenceQueryService:
     raise NotImplementedError(_UNWIRED)
 
 
+def get_analyze_prices() -> AnalyzePrices:
+    raise NotImplementedError(_UNWIRED)
+
+
 ProductQueryDep = Annotated[
     ProductQueryService, Depends(get_product_query_service)
 ]
+AnalyzePricesDep = Annotated[AnalyzePrices, Depends(get_analyze_prices)]
 ReferenceQueryDep = Annotated[
     ReferenceQueryService, Depends(get_reference_query_service)
 ]

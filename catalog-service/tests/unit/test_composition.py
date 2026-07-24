@@ -14,6 +14,7 @@ def test_container_builds_use_cases_and_services():
     assert isinstance(container.create_product_uc(), CreateProduct)
     assert container.product_query_service() is not None
     assert container.reference_query_service() is not None
+    assert container.analyze_prices() is not None
     assert container.outbox_publisher() is not None
 
 
@@ -29,5 +30,6 @@ def test_build_app_wires_all_providers():
         deps.get_delete_product_uc,
         deps.get_product_query_service,
         deps.get_reference_query_service,
+        deps.get_analyze_prices,
     ):
         assert provider in app.dependency_overrides
