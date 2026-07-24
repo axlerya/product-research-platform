@@ -2,7 +2,26 @@
 
 from functools import lru_cache
 
+from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class LlmSettings(BaseModel):
+    """LLM через OpenAI-совместимый эндпоинт с кастомным base_url.
+
+    Переменные окружения — с префиксом RESEARCH_AGENT_LLM__ (например
+    RESEARCH_AGENT_LLM__BASE_URL, RESEARCH_AGENT_LLM__MODEL).
+    """
+
+    model: str = "qwen3"
+    base_url: str = "http://localhost:8001/v1"
+    api_key: str = "sk-local"
+    temperature: float = 0.0
+    max_tokens: int = 4096
+    timeout: float = 60.0
+    max_retries: int = 3
+    service_tier: str = "auto"
+    enable_thinking: bool = False
 
 
 class Settings(BaseSettings):
@@ -11,6 +30,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="RESEARCH_AGENT_",
         env_file=".env",
+        env_nested_delimiter="__",
         extra="ignore",
     )
 
@@ -23,6 +43,8 @@ class Settings(BaseSettings):
     )
     redis_url: str = "redis://localhost:6379/0"
     rabbitmq_dsn: str = "amqp://guest:guest@localhost:5672/"
+
+    llm: LlmSettings = LlmSettings()
 
     # Пусто = distributed tracing выключен.
     otlp_endpoint: str = ""

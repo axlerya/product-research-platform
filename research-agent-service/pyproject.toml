@@ -9,6 +9,7 @@ requires-python = ">=3.12"
 dependencies = [
     "asyncpg>=0.29",
     "httpx>=0.27",
+    "langchain-openai>=0.2",
     "prometheus-client>=0.25",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
@@ -68,8 +69,8 @@ extend-immutable-calls = [
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "langgraph".msg = "Оркестрация LLM — только infrastructure.agent."
 "langchain_core".msg = "LangChain — только infrastructure.agent."
-"langchain_anthropic".msg = "LLM-SDK — только infrastructure.agent."
-"anthropic".msg = "LLM-SDK — только infrastructure.agent."
+"langchain_openai".msg = "LLM-SDK — только infrastructure.agent."
+"openai".msg = "LLM-SDK — только infrastructure.agent."
 "tavily".msg = "Web-search SDK — только infrastructure.websearch."
 "qdrant_client".msg = "Векторное хранилище — только infrastructure.qdrant."
 "redis".msg = "Redis — только infrastructure.redis."
@@ -133,8 +134,8 @@ source_modules = ["research_agent_service.domain"]
 forbidden_modules = [
     "langgraph",
     "langchain_core",
-    "langchain_anthropic",
-    "anthropic",
+    "langchain_openai",
+    "openai",
     "tavily",
     "qdrant_client",
     "redis",
@@ -155,8 +156,8 @@ source_modules = ["research_agent_service.application"]
 forbidden_modules = [
     "langgraph",
     "langchain_core",
-    "langchain_anthropic",
-    "anthropic",
+    "langchain_openai",
+    "openai",
     "tavily",
     "qdrant_client",
     "redis",

@@ -25,3 +25,22 @@ def test_get_settings_is_cached() -> None:
     get_settings.cache_clear()
 
     assert get_settings() is get_settings()
+
+
+def test_llm_settings_defaults() -> None:
+    """LLM-настройки: кастомный base_url, thinking выключен по умолчанию."""
+    llm = Settings().llm
+
+    assert llm.base_url == "http://localhost:8001/v1"
+    assert llm.enable_thinking is False
+
+
+def test_llm_nested_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Вложенные переменные RESEARCH_AGENT_LLM__* переопределяют LLM."""
+    monkeypatch.setenv("RESEARCH_AGENT_LLM__BASE_URL", "http://custom/v1")
+    monkeypatch.setenv("RESEARCH_AGENT_LLM__MODEL", "gpt-x")
+
+    settings = Settings()
+
+    assert settings.llm.base_url == "http://custom/v1"
+    assert settings.llm.model == "gpt-x"
