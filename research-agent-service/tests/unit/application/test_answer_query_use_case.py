@@ -140,6 +140,16 @@ async def test_completed_query_persists_run_and_event() -> None:
     assert len(uow.conversations.added_messages) == 2
 
 
+async def test_tool_calls_rebound_to_run_id() -> None:
+    """Вызовы инструментов привязываются к id прогона (целостность FK)."""
+    uow = FakeUnitOfWork()
+
+    result = await _use_case(uow).execute(_command())
+
+    stored = uow.agent_runs.added[0]
+    assert stored.tool_calls[0].agent_run_id == result.agent_run_id
+
+
 async def test_dangling_citation_dropped_and_degraded() -> None:
     """Цитата на неизвестный факт отбрасывается → прогон degraded."""
     outcome = _outcome(
