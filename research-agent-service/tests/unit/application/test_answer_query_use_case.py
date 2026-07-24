@@ -23,6 +23,7 @@ from research_agent_service.application.services.source_validation import (
 from research_agent_service.application.use_cases.answer_query import (
     AnswerQueryUseCase,
 )
+from research_agent_service.domain.entities.agent_run import AgentRun
 from research_agent_service.domain.entities.conversation import Conversation
 from research_agent_service.domain.entities.message import Message
 from research_agent_service.domain.entities.tool_call import ToolCall
@@ -45,6 +46,7 @@ from research_agent_service.domain.value_objects.query import Query
 from research_agent_service.domain.value_objects.usage import TokenUsage
 from tests.support.fakes import (
     FIXED_NOW,
+    FakeCache,
     FakeClock,
     FakeIdGenerator,
     FakeOrchestrator,
@@ -244,3 +246,121 @@ async def test_missing_conversation_creates_fresh() -> None:
 
     assert result.conversation_id == conv_id
     assert len(uow.conversations.added) == 1
+
+
+def _idem_command() -> AnswerQueryCommand:
+    return AnswerQueryCommand(
+        query=Query(text="найди наушники", idempotency_key="idem-1"),
+        client_principal="client-1",
+    )
+
+
+def _cached_use_case(
+    uow: FakeUnitOfWork,
+    cache: FakeCache,
+    orchestrator: FakeOrchestrator,
+) -> AnswerQueryUseCase:
+    return AnswerQueryUseCase(
+        uow=uow,
+        orchestrator=orchestrator,
+        rate_limiter=FakeRateLimiter(),
+        source_validator=SourceValidator(),
+        id_generator=FakeIdGenerator(),
+        clock=FakeClock(),
+        cache=cache,
+    )
+
+
+def _bare_run(run_id: int) -> AgentRun:
+    return AgentRun(
+        id=AgentRunId(UUID(int=run_id)),
+        conversation_id=ConversationId(UUID(int=2)),
+        query_message_id=MessageId(UUID(int=3)),
+        model="m",
+        prompt_version="v1",
+        started_at=FIXED_NOW,
+    )
+
+
+async def test_idempotent_replay_reuses_prior_run() -> None:
+    """Повтор с тем же idempotency_key возвращает прежний результат."""
+    outcome = _outcome(
+        citations=(_citation("SKU-1"),), retrieved_refs=("SKU-1",)
+    )
+    uow = FakeUnitOfWork()
+    cache = FakeCache()
+    orchestrator = FakeOrchestrator(outcome=outcome)
+    use_case = _cached_use_case(uow, cache, orchestrator)
+
+    first = await use_case.execute(_idem_command())
+    second = await use_case.execute(_idem_command())
+
+    assert orchestrator.calls == 1
+    assert second.agent_run_id == first.agent_run_id
+    assert second.answer == first.answer
+    assert [c.ref for c in second.citations] == ["SKU-1"]
+    assert second.used_tools == (ToolName.PRODUCT_CATALOG_RAG,)
+    assert len(uow.agent_runs.added) == 1
+    assert cache.store
+
+
+async def test_query_without_idempotency_key_is_not_cached() -> None:
+    """Без idempotency_key кеш не задействован."""
+    uow = FakeUnitOfWork()
+    cache = FakeCache()
+    orchestrator = FakeOrchestrator(outcome=_outcome())
+    use_case = _cached_use_case(uow, cache, orchestrator)
+
+    await use_case.execute(_command())
+
+    assert cache.store == {}
+    assert orchestrator.calls == 1
+
+
+async def test_replay_falls_through_when_run_absent() -> None:
+    """Ключ есть, а прогон не найден → обычный путь."""
+    uow = FakeUnitOfWork()
+    cache = FakeCache()
+    cache.store["idem:client-1:idem-1"] = str(UUID(int=777))
+    orchestrator = FakeOrchestrator(outcome=_outcome())
+    use_case = _cached_use_case(uow, cache, orchestrator)
+
+    await use_case.execute(_idem_command())
+
+    assert orchestrator.calls == 1
+    assert len(uow.agent_runs.added) == 1
+
+
+async def test_replay_falls_through_when_run_not_finalized() -> None:
+    """Прогон без answer_message_id (не завершён) → обычный путь."""
+    uow = FakeUnitOfWork(run=_bare_run(800))
+    cache = FakeCache()
+    cache.store["idem:client-1:idem-1"] = str(UUID(int=800))
+    orchestrator = FakeOrchestrator(outcome=_outcome())
+    use_case = _cached_use_case(uow, cache, orchestrator)
+
+    await use_case.execute(_idem_command())
+
+    assert orchestrator.calls == 1
+
+
+async def test_replay_falls_through_when_answer_message_gone() -> None:
+    """Прогон найден, но сообщение-ответ отсутствует → обычный путь."""
+    completed = _bare_run(900)
+    completed.complete(
+        answer_message_id=MessageId(UUID(int=901)),
+        usage=TokenUsage(prompt_tokens=1, completion_tokens=1),
+        confidence=Confidence.HIGH,
+        degradations=(),
+        loop_steps=1,
+        now=FIXED_NOW,
+    )
+    uow = FakeUnitOfWork(run=completed)
+    cache = FakeCache()
+    cache.store["idem:client-1:idem-1"] = str(UUID(int=900))
+    orchestrator = FakeOrchestrator(outcome=_outcome())
+    use_case = _cached_use_case(uow, cache, orchestrator)
+
+    await use_case.execute(_idem_command())
+
+    assert orchestrator.calls == 1

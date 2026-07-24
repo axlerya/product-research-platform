@@ -66,6 +66,7 @@ from research_agent_service.infrastructure.observability.metrics import (
 from research_agent_service.infrastructure.qdrant.vector_search import (
     QdrantVectorSearch,
 )
+from research_agent_service.infrastructure.redis.cache import RedisCache
 from research_agent_service.infrastructure.redis.rate_limiter import (
     RedisTokenBucket,
 )
@@ -162,6 +163,7 @@ class Container:
                 id_generator=ids,
                 clock=clock,
                 model=settings.llm.model,
+                cache=RedisCache(client=self._redis),
             ),
             submit_feedback=SubmitFeedbackUseCase(
                 uow=uow, id_generator=ids, clock=clock

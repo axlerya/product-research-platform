@@ -190,3 +190,30 @@ async def test_feedback_missing_run_and_explicit_rollback(
         await uow.rollback()
     async with uow:
         assert await uow.conversations.get(ConversationId(UUID(int=23))) is None
+
+
+async def test_get_message_returns_stored_or_none(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """get_message возвращает сохранённое сообщение или None."""
+    conv = _conversation(70)
+    message = Message(
+        id=MessageId(UUID(int=71)),
+        conversation_id=conv.id,
+        role=MessageRole.USER,
+        content="привет",
+        created_at=_NOW,
+    )
+    uow = SqlAlchemyUnitOfWork(session_factory=session_factory)
+    async with uow:
+        await uow.conversations.add(conv)
+        await uow.conversations.add_message(message)
+        await uow.commit()
+
+    async with uow:
+        loaded = await uow.conversations.get_message(MessageId(UUID(int=71)))
+        missing = await uow.conversations.get_message(MessageId(UUID(int=72)))
+
+    assert loaded is not None
+    assert loaded.content == "привет"
+    assert missing is None

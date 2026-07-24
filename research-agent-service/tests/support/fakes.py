@@ -47,6 +47,7 @@ class FakeConversationRepository:
         self.added_messages: list[Message] = []
         self.history: tuple[Message, ...] = ()
         self._store: dict[UUID, Conversation] = {}
+        self._messages: dict[UUID, Message] = {}
 
     async def add(self, conversation: Conversation) -> None:
         self.added.append(conversation)
@@ -57,6 +58,10 @@ class FakeConversationRepository:
 
     async def add_message(self, message: Message) -> None:
         self.added_messages.append(message)
+        self._messages[message.id.value] = message
+
+    async def get_message(self, message_id: object) -> Message | None:
+        return self._messages.get(message_id.value)
 
     async def load_history(
         self, conversation_id: ConversationId, *, limit: int
@@ -70,12 +75,14 @@ class FakeAgentRunRepository:
     def __init__(self, *, run: AgentRun | None = None) -> None:
         self.added: list[AgentRun] = []
         self._run = run
+        self._by_id: dict[UUID, AgentRun] = {}
 
     async def add(self, run: AgentRun) -> None:
         self.added.append(run)
+        self._by_id[run.id.value] = run
 
     async def get(self, run_id: AgentRunId) -> AgentRun | None:
-        return self._run
+        return self._by_id.get(run_id.value, self._run)
 
     async def list(self, **kwargs: object) -> tuple[AgentRun, ...]:
         return tuple(self.added)
@@ -125,6 +132,22 @@ class FakeUnitOfWork:
         self.rolled_back = True
 
 
+class FakeCache:
+    """Строковый кеш в памяти (для идемпотентности)."""
+
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+
+    async def get(self, key: str) -> str | None:
+        return self.store.get(key)
+
+    async def set(self, key: str, value: str, *, ttl_s: int) -> None:
+        self.store[key] = value
+
+    async def delete(self, key: str) -> None:
+        self.store.pop(key, None)
+
+
 class FakeRateLimiter:
     """Rate limiter с заранее заданным вердиктом."""
 
@@ -153,11 +176,13 @@ class FakeOrchestrator:
         self._outcome = outcome
         self._error = error
         self.history: tuple[object, ...] = ()
+        self.calls = 0
 
     async def run(
         self, query: object, history: tuple[object, ...], *, deadline_s: float
     ) -> AgentOutcome:
         self.history = history
+        self.calls += 1
         if self._error is not None:
             raise self._error
         if self._outcome is None:

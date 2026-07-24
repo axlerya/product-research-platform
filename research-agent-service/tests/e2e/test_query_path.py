@@ -54,6 +54,7 @@ from research_agent_service.infrastructure.services.id_generator import (
 )
 from research_agent_service.presentation.api.app import create_app
 from research_agent_service.presentation.api.services import ApiServices
+from tests.support.fakes import FakeCache
 
 pytestmark = pytest.mark.e2e
 
@@ -151,7 +152,11 @@ def _model() -> _StubModel:
     )
 
 
-def _app(session_factory: async_sessionmaker[AsyncSession]) -> object:
+def _app(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    cache: object = None,
+) -> object:
     clock = SystemClock()
     ids = Uuid7Generator()
     executor = ToolExecutor(
@@ -174,6 +179,7 @@ def _app(session_factory: async_sessionmaker[AsyncSession]) -> object:
             id_generator=ids,
             clock=clock,
             model="stub-llm",
+            cache=cache,
         ),
         submit_feedback=SubmitFeedbackUseCase(
             uow=uow, id_generator=ids, clock=clock
@@ -256,3 +262,23 @@ async def test_feedback_path_persists_feedback_and_events(
         ]
         assert "agent.feedback.received.v1" in events
         assert "agent.evaluation.requested.v1" in events
+
+
+async def test_idempotent_query_replays_without_new_run(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Повтор с тем же idempotency_key не создаёт новый прогон."""
+    app = _app(session_factory, cache=FakeCache())
+    body = {"text": "найди наушники", "idempotency_key": "idem-e2e"}
+    async with _client(app) as client:
+        first = await client.post("/query", json=body)
+        second = await client.post("/query", json=body)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["agent_run_id"] == second.json()["agent_run_id"]
+    assert first.json()["answer"] == second.json()["answer"]
+
+    async with session_factory() as session:
+        runs = (await session.scalars(select(AgentRunORM))).all()
+    assert len(runs) == 1

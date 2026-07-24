@@ -7,6 +7,7 @@ from research_agent_service.domain.entities.conversation import Conversation
 from research_agent_service.domain.entities.message import Message
 from research_agent_service.domain.value_objects.identifiers import (
     ConversationId,
+    MessageId,
 )
 from research_agent_service.infrastructure.db.mappers import (
     conversation_from_orm,
@@ -35,6 +36,10 @@ class SqlAlchemyConversationRepository:
 
     async def add_message(self, message: Message) -> None:
         self._session.add(message_to_orm(message))
+
+    async def get_message(self, message_id: MessageId) -> Message | None:
+        orm = await self._session.get(MessageORM, message_id.value)
+        return message_from_orm(orm) if orm is not None else None
 
     async def load_history(
         self, conversation_id: ConversationId, *, limit: int
