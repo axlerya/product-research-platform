@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 # только stdlib). LangChain/LangGraph, Qdrant, Redis, gRPC, FastAPI и пр.
 # подключаются в тех PR, где появляется соответствующий адаптер.
 dependencies = [
+    "prometheus-client>=0.25",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
 ]
