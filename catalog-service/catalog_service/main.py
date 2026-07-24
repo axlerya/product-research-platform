@@ -23,6 +23,7 @@ def build_app(container: Container | None = None) -> FastAPI:
         deps.get_delete_product_uc: container.delete_product_uc,
         deps.get_product_query_service: container.product_query_service,
         deps.get_reference_query_service: container.reference_query_service,
+        deps.get_analyze_prices: container.analyze_prices,
     }
     app.dependency_overrides.update(overrides)
     return app

@@ -13,7 +13,9 @@ from catalog_service.presentation.api.schemas.common import Problem
 from catalog_service.presentation.api.schemas.reads import (
     MarginRead,
     Page,
+    ProductBatchRead,
     ProductRead,
+    ProductsBySkusRequest,
 )
 
 router = APIRouter(prefix="/api/v1/products", tags=["products"])
@@ -63,6 +65,18 @@ async def search_products(
         total=page.total,
         limit=page.limit,
         offset=page.offset,
+    )
+
+
+@router.post("/by-skus", response_model=ProductBatchRead)
+async def get_products_by_skus(
+    body: ProductsBySkusRequest, qs: ProductQueryDep
+) -> ProductBatchRead:
+    """Читает товары пачкой по артикулам, отмечая отсутствующие."""
+    batch = await qs.get_many(body.skus, include_deleted=body.include_deleted)
+    return ProductBatchRead(
+        products=[ProductRead.model_validate(view) for view in batch.products],
+        missing_skus=list(batch.missing_skus),
     )
 
 
