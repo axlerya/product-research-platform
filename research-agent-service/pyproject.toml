@@ -30,8 +30,7 @@ packages = ["research_agent_service"]
 target-version = "py312"
 # Google Python Style Guide — максимум 80 символов в строке.
 line-length = 80
-# Markdown-доки (ARCHITECTURE.md и пр.) — не исходный код: примеры в них
-# намеренно компактны, ruff их не форматирует и не линтует.
+# Markdown — не исходный код: ruff его не форматирует и не линтует.
 extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
