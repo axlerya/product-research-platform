@@ -7,6 +7,9 @@ from fastapi import FastAPI
 from research_agent_service.presentation.api.errors import (
     register_error_handlers,
 )
+from research_agent_service.presentation.api.middleware import (
+    install_request_context,
+)
 from research_agent_service.presentation.api.routes import (
     health,
     queries,
@@ -28,6 +31,7 @@ def create_app(
     app = FastAPI(title="research-agent-service", lifespan=lifespan)
     if services is not None:
         app.state.services = services
+    install_request_context(app)
     register_error_handlers(app)
     app.include_router(query.router)
     app.include_router(queries.router)
