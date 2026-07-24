@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 # только stdlib). LangChain/LangGraph, Qdrant, Redis, gRPC, FastAPI и пр.
 # подключаются в тех PR, где появляется соответствующий адаптер.
 dependencies = [
+    "alembic>=1.13",
     "asyncpg>=0.29",
     "faststream[rabbit]>=0.5",
     "grpcio>=1.66",
@@ -48,8 +49,8 @@ packages = ["research_agent_service"]
 target-version = "py312"
 # Google Python Style Guide — максимум 80 символов в строке.
 line-length = 80
-# Markdown — не исходный код: ruff его не форматирует и не линтует.
-extend-exclude = ["*.md", "**/_generated/**"]
+# Markdown — не исходный код; alembic/versions — автогенерируемые миграции.
+extend-exclude = ["*.md", "**/_generated/**", "alembic/versions/**"]
 
 [tool.ruff.lint]
 # E/F — pyflakes+pycodestyle, I — isort, UP — pyupgrade, B — bugbear,
