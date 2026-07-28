@@ -46,6 +46,11 @@ class Settings(BaseSettings):
 
     embedding_grpc_target: str = "localhost:50051"
     reranker_grpc_target: str = "localhost:50051"
+    # Дедлайны gRPC — характеристика развёртывания, а не кода: те же модели
+    # на CPU отвечают в разы медленнее, чем на GPU, и умолчания под GPU там
+    # срываются в DEADLINE_EXCEEDED, то есть в деградацию на каждом запросе.
+    embedding_deadline_s: float = 1.5
+    reranker_deadline_s: float = 5.0
     qdrant_url: str = "http://localhost:6333"
     qdrant_collection: str = "products"
     catalog_base_url: str = "http://localhost:8000"

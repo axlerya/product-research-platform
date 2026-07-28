@@ -128,10 +128,12 @@ class Container:
         embedding = GrpcEmbeddingClient(
             stub=embedding_pb2_grpc.EmbeddingServiceStub(
                 self._embedding_channel
-            )
+            ),
+            deadline_s=settings.embedding_deadline_s,
         )
         reranker = GrpcRerankerClient(
-            stub=reranker_pb2_grpc.RerankerServiceStub(self._reranker_channel)
+            stub=reranker_pb2_grpc.RerankerServiceStub(self._reranker_channel),
+            deadline_s=settings.reranker_deadline_s,
         )
         catalog = HttpCatalogClient(client=self._catalog_http)
         rag = ProductCatalogRagService(

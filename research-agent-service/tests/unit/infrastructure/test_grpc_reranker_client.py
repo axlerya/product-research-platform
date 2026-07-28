@@ -29,10 +29,25 @@ class _FakeStub:
     async def Rerank(
         self, request: reranker_pb2.RerankRequest, **kwargs: float
     ) -> reranker_pb2.RerankResponse:
+        self.timeout = kwargs.get("timeout")
         if self._error is not None:
             raise self._error
         assert self._response is not None
         return self._response
+
+
+async def test_deadline_is_configurable() -> None:
+    """Дедлайн задаётся снаружи: на CPU реранкинг заметно медленнее.
+
+    Жёстко зашитые 5 с не выдерживаются cross-encoder'ом на CPU, и вызов
+    срывается в DEADLINE_EXCEEDED — то есть в деградацию на каждом запросе.
+    """
+    stub = _FakeStub(response=reranker_pb2.RerankResponse(results=[]))
+    client = GrpcRerankerClient(stub=stub, deadline_s=30.0)
+
+    await client.rerank("q", (RerankDocument(id="d", text="t"),), top_n=1)
+
+    assert stub.timeout == 30.0
 
 
 def _error(code: grpc.StatusCode) -> AioRpcError:
