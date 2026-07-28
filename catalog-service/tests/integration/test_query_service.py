@@ -5,7 +5,10 @@ from decimal import Decimal
 import pytest
 
 from catalog_service.application.dto.commands import CreateProductCommand
-from catalog_service.application.dto.queries import ProductSearchQuery
+from catalog_service.application.dto.queries import (
+    PriceAnalysisSelector,
+    ProductSearchQuery,
+)
 from catalog_service.application.use_cases.create_product import CreateProduct
 from catalog_service.infrastructure.db.repositories.query_service import (
     SqlAlchemyProductQueryService,
@@ -85,6 +88,100 @@ async def test_get_respects_include_deleted(sm):
     qs = SqlAlchemyProductQueryService(sm)
     assert await qs.get(sku="PROD-1") is None
     assert await qs.get(sku="PROD-1", include_deleted=True) is not None
+
+
+async def test_get_many_keeps_request_order_and_reports_missing(sm):
+    await _create(sm, sku="PROD-1")
+    await _create(sm, sku="PROD-2")
+    batch = await SqlAlchemyProductQueryService(sm).get_many(
+        ["prod-2", "PROD-1", "NOPE-1"]
+    )
+    assert [view.sku for view in batch.products] == ["PROD-2", "PROD-1"]
+    assert batch.missing_skus == ("NOPE-1",)
+
+
+async def test_get_many_deduplicates_and_normalizes_skus(sm):
+    await _create(sm, sku="PROD-1")
+    batch = await SqlAlchemyProductQueryService(sm).get_many(
+        [" prod-1 ", "PROD-1"]
+    )
+    assert [view.sku for view in batch.products] == ["PROD-1"]
+    assert batch.missing_skus == ()
+
+
+async def test_get_many_without_skus_returns_empty_batch(sm):
+    batch = await SqlAlchemyProductQueryService(sm).get_many([])
+    assert batch.products == ()
+    assert batch.missing_skus == ()
+
+
+async def test_get_many_respects_include_deleted(sm):
+    from catalog_service.application.dto.commands import DeleteProductCommand
+    from catalog_service.application.use_cases.delete_product import (
+        DeleteProduct,
+    )
+
+    result = await _create(sm, sku="PROD-1")
+    await DeleteProduct(
+        uow=SqlAlchemyUnitOfWork(sm),
+        clock=SystemClock(),
+        id_gen=Uuid7Generator(),
+    ).execute(
+        DeleteProductCommand(product_id=result.product_id, expected_version=1)
+    )
+    qs = SqlAlchemyProductQueryService(sm)
+    assert (await qs.get_many(["PROD-1"])).missing_skus == ("PROD-1",)
+    included = await qs.get_many(["PROD-1"], include_deleted=True)
+    assert [view.sku for view in included.products] == ["PROD-1"]
+
+
+async def test_select_for_analysis_by_explicit_skus(sm):
+    for sku in ("PROD-1", "PROD-2", "PROD-3"):
+        await _create(sm, sku=sku)
+    views = await SqlAlchemyProductQueryService(sm).select_for_analysis(
+        PriceAnalysisSelector(skus=("prod-3", "PROD-1"))
+    )
+    assert [view.sku for view in views] == ["PROD-1", "PROD-3"]
+
+
+async def test_select_for_analysis_by_facets(sm):
+    await _create(sm, sku="PROD-1", category_name="Электроника")
+    await _create(sm, sku="PROD-2", category_name="Мебель")
+    views = await SqlAlchemyProductQueryService(sm).select_for_analysis(
+        PriceAnalysisSelector(category="Электроника", in_stock=True)
+    )
+    assert [view.sku for view in views] == ["PROD-1"]
+
+
+async def test_select_for_analysis_excludes_deleted_by_default(sm):
+    from catalog_service.application.dto.commands import DeleteProductCommand
+    from catalog_service.application.use_cases.delete_product import (
+        DeleteProduct,
+    )
+
+    result = await _create(sm, sku="PROD-1")
+    await DeleteProduct(
+        uow=SqlAlchemyUnitOfWork(sm),
+        clock=SystemClock(),
+        id_gen=Uuid7Generator(),
+    ).execute(
+        DeleteProductCommand(product_id=result.product_id, expected_version=1)
+    )
+    qs = SqlAlchemyProductQueryService(sm)
+    assert await qs.select_for_analysis(PriceAnalysisSelector()) == ()
+    kept = await qs.select_for_analysis(
+        PriceAnalysisSelector(include_deleted=True)
+    )
+    assert [view.sku for view in kept] == ["PROD-1"]
+
+
+async def test_select_for_analysis_returns_whole_slice_without_paging(sm):
+    for index in range(25):
+        await _create(sm, sku=f"PROD-{index:03d}")
+    views = await SqlAlchemyProductQueryService(sm).select_for_analysis(
+        PriceAnalysisSelector()
+    )
+    assert len(views) == 25
 
 
 async def test_search_all_filters(sm):

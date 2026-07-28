@@ -28,6 +28,22 @@ PercentOpt = Annotated[
     ),
 ]
 
+# Проценты в ответах аналитики. Точность на входе не ограничиваем: значение
+# либо посчитано нами (уже округлено), либо возвращается эхом из запроса —
+# ограничение колонки products.margin_percent тут не при чём.
+StatPercent = Annotated[
+    Decimal,
+    PlainSerializer(lambda v: f"{v:.2f}", return_type=str, when_used="json"),
+]
+StatPercentOpt = Annotated[
+    Decimal | None,
+    PlainSerializer(
+        lambda v: None if v is None else f"{v:.2f}",
+        return_type=str | None,
+        when_used="json",
+    ),
+]
+
 SKU_PATTERN = r"^[A-Z0-9][A-Z0-9-]{1,62}[A-Z0-9]$"
 SkuField = Annotated[
     str, Field(pattern=SKU_PATTERN, min_length=3, max_length=64)

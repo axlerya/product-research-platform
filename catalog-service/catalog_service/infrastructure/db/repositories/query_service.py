@@ -5,14 +5,16 @@
 по whitelist (защита от инъекций).
 """
 
+from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from catalog_service.application.dto.queries import (
     SORT_COLUMNS,
+    PriceAnalysisSelector,
     ProductSearchQuery,
 )
 from catalog_service.application.dto.views import (
@@ -20,6 +22,7 @@ from catalog_service.application.dto.views import (
     MarginView,
     MoneyView,
     Page,
+    ProductBatchView,
     ProductView,
     ReferenceView,
 )
@@ -74,7 +77,15 @@ def _order_by(sort: str) -> str:
     return f"p.{column} {'DESC' if descending else 'ASC'}"
 
 
-def _filters(query: ProductSearchQuery) -> tuple[list[str], dict[str, Any]]:
+def _normalize(skus: Sequence[str]) -> list[str]:
+    """Нормализует артикулы как домен (strip+upper), сохраняя порядок."""
+    return list(dict.fromkeys(sku.strip().upper() for sku in skus))
+
+
+def _filters(
+    query: ProductSearchQuery | PriceAnalysisSelector,
+) -> tuple[list[str], dict[str, Any]]:
+    """Условия и параметры общих фасетов (поиск и срез анализа одинаковы)."""
     conditions: list[str] = []
     params: dict[str, Any] = {}
     if not query.include_deleted:
@@ -140,6 +151,44 @@ class SqlAlchemyProductQueryService:
         async with self._sessionmaker() as session:
             row = (await session.execute(text(_SELECT + where), params)).first()
         return _to_view(row) if row is not None else None
+
+    async def get_many(
+        self, skus: Sequence[str], *, include_deleted: bool = False
+    ) -> ProductBatchView:
+        requested = _normalize(skus)
+        if not requested:
+            return ProductBatchView(products=(), missing_skus=())
+        conditions = ["p.sku IN :skus"]
+        if not include_deleted:
+            conditions.append("p.is_deleted = FALSE")
+        statement = text(
+            _SELECT + " WHERE " + " AND ".join(conditions)
+        ).bindparams(bindparam("skus", expanding=True))
+        async with self._sessionmaker() as session:
+            rows = (await session.execute(statement, {"skus": requested})).all()
+        found = {row.sku: _to_view(row) for row in rows}
+        return ProductBatchView(
+            # Порядок ответа — порядок запроса: клиент сопоставляет позиции.
+            products=tuple(found[sku] for sku in requested if sku in found),
+            missing_skus=tuple(sku for sku in requested if sku not in found),
+        )
+
+    async def select_for_analysis(
+        self, selector: PriceAnalysisSelector
+    ) -> tuple[ProductView, ...]:
+        conditions, params = _filters(selector)
+        requested = _normalize(selector.skus)
+        if requested:
+            conditions.append("p.sku IN :skus")
+            params["skus"] = requested
+        where = " WHERE " + " AND ".join(conditions) if conditions else ""
+        # Без пагинации: статистика считается по всему срезу целиком.
+        statement = text(f"{_SELECT}{where} ORDER BY p.sku")
+        if requested:
+            statement = statement.bindparams(bindparam("skus", expanding=True))
+        async with self._sessionmaker() as session:
+            rows = (await session.execute(statement, params)).all()
+        return tuple(_to_view(row) for row in rows)
 
     async def search(self, query: ProductSearchQuery) -> Page[ProductView]:
         conditions, params = _filters(query)

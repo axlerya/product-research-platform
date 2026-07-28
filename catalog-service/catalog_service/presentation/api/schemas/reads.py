@@ -1,15 +1,21 @@
-"""Схемы ответов чтения (из application-DTO ``*View``)."""
+"""Схемы чтения (из application-DTO ``*View``) и запрос batch-чтения."""
 
 from datetime import date, datetime
+from typing import Annotated
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from catalog_service.presentation.api.schemas.common import (
     Amount,
     PercentOpt,
     RatingValue,
 )
+
+# Артикул в batch-запросе не валидируется паттерном: неизвестный артикул —
+# это ``missing_skus`` в ответе, а не 422 на весь запрос.
+SkuItem = Annotated[str, Field(min_length=1, max_length=64)]
+MAX_BATCH_SKUS = 500
 
 
 class MoneyRead(BaseModel):
@@ -52,6 +58,23 @@ class ProductRead(BaseModel):
     is_deleted: bool
     created_at: datetime
     updated_at: datetime
+
+
+class ProductsBySkusRequest(BaseModel):
+    """POST /products/by-skus — batch-чтение по списку артикулов."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    skus: list[SkuItem] = Field(default_factory=list, max_length=MAX_BATCH_SKUS)
+    include_deleted: bool = False
+
+
+class ProductBatchRead(BaseModel):
+    """Ответ batch-чтения по артикулам: найденные и отсутствующие."""
+
+    model_config = ConfigDict(from_attributes=True)
+    products: list[ProductRead]
+    missing_skus: list[str]
 
 
 class Page[T](BaseModel):

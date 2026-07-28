@@ -13,6 +13,7 @@ from catalog_service.application.ports.read_models import (
     ProductQueryService,
     ReferenceQueryService,
 )
+from catalog_service.application.price_analysis import AnalyzePrices
 from catalog_service.application.use_cases.create_product import CreateProduct
 from catalog_service.application.use_cases.delete_product import DeleteProduct
 from catalog_service.application.use_cases.seed_catalog import SeedCatalog
@@ -98,6 +99,12 @@ class Container:
 
     def reference_query_service(self) -> ReferenceQueryService:
         return SqlAlchemyReferenceQueryService(self.sessionmaker)
+
+    def analyze_prices(self) -> AnalyzePrices:
+        return AnalyzePrices(
+            products=self.product_query_service(),
+            default_currency=self.settings.default_currency,
+        )
 
     def csv_row_source(self, path: str | Path) -> CsvRowSource:
         return CsvRowSourceImpl(path)

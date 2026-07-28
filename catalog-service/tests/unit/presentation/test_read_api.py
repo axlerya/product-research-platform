@@ -1,5 +1,6 @@
 """Тесты read-эндпоинтов HTTP API (TestClient + фейковые query-сервисы)."""
 
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import UUID
@@ -7,14 +8,17 @@ from uuid import UUID
 import pytest
 from fastapi.testclient import TestClient
 
+from catalog_service.application.dto.queries import PriceAnalysisSelector
 from catalog_service.application.dto.views import (
     CategoryMarginRow,
     MarginView,
     MoneyView,
     Page,
+    ProductBatchView,
     ProductView,
     ReferenceView,
 )
+from catalog_service.application.price_analysis import AnalyzePrices
 from catalog_service.presentation.api import deps
 from catalog_service.presentation.api.app import create_app
 
@@ -48,16 +52,29 @@ def _view(sku: str = "PROD-1") -> ProductView:
 
 
 class _FakeProductQuery:
-    def __init__(self, *, view=None, page=None, margins=()) -> None:
+    def __init__(
+        self, *, view=None, page=None, margins=(), batch=None, slice_=()
+    ) -> None:
         self._view = view
         self._page = page
         self._margins = margins
+        self._batch = batch
+        self._slice = slice_
+        self.calls: list = []
 
     async def get(self, *, product_id=None, sku=None, include_deleted=False):
         return self._view
 
+    async def get_many(self, skus, *, include_deleted=False):
+        self.calls.append((tuple(skus), include_deleted))
+        return self._batch
+
     async def search(self, query):
         return self._page
+
+    async def select_for_analysis(self, selector):
+        self.calls.append(selector)
+        return self._slice
 
     async def margin_by_category(self, *, include_deleted=False):
         return self._margins
@@ -189,9 +206,115 @@ def test_analytics_margin_returns_rows():
     assert resp.json()[0]["avg_margin_percent"] == "50.00"
 
 
+def test_by_skus_returns_found_and_missing():
+    batch = ProductBatchView(
+        products=(_view("PROD-1"),), missing_skus=("NOPE-1",)
+    )
+    qs = _FakeProductQuery(batch=batch)
+    client = _client({deps.get_product_query_service: qs})
+    resp = client.post(
+        "/api/v1/products/by-skus",
+        json={"skus": ["PROD-1", "NOPE-1"], "include_deleted": False},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["missing_skus"] == ["NOPE-1"]
+    assert body["products"][0]["sku"] == "PROD-1"
+    assert body["products"][0]["price"] == {
+        "amount": "129.99",
+        "currency": "RUB",
+    }
+    assert body["products"][0]["margin"]["percent"] == "50.00"
+    assert qs.calls == [(("PROD-1", "NOPE-1"), False)]
+
+
+def test_by_skus_passes_include_deleted():
+    qs = _FakeProductQuery(batch=ProductBatchView(products=(), missing_skus=()))
+    client = _client({deps.get_product_query_service: qs})
+    resp = client.post(
+        "/api/v1/products/by-skus",
+        json={"skus": ["PROD-1"], "include_deleted": True},
+    )
+    assert resp.status_code == 200
+    assert qs.calls == [(("PROD-1",), True)]
+
+
+def test_by_skus_without_skus_returns_empty_batch():
+    qs = _FakeProductQuery(batch=ProductBatchView(products=(), missing_skus=()))
+    client = _client({deps.get_product_query_service: qs})
+    resp = client.post("/api/v1/products/by-skus", json={"skus": []})
+    assert resp.status_code == 200
+    assert resp.json() == {"products": [], "missing_skus": []}
+
+
+def test_by_skus_rejects_unknown_field():
+    qs = _FakeProductQuery(batch=ProductBatchView(products=(), missing_skus=()))
+    client = _client({deps.get_product_query_service: qs})
+    resp = client.post(
+        "/api/v1/products/by-skus", json={"skus": [], "limit": 5}
+    )
+    assert resp.status_code == 422
+
+
+def test_analytics_prices_returns_statistics():
+    qs = _FakeProductQuery(slice_=(_view("PROD-1"), _view("PROD-2")))
+    uc = AnalyzePrices(products=qs, default_currency="RUB")
+    client = _client({deps.get_analyze_prices: uc})
+    resp = client.post(
+        "/api/v1/analytics/prices",
+        json={
+            "selector": {"category": "Электроника", "skus": []},
+            "bands": [{"label": "высокая", "lower_percent": "40"}],
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["count"] == 2
+    assert body["currency"] == "RUB"
+    assert body["price"]["median"] == "129.99"
+    assert body["price"]["stddev"] == "0.00"
+    assert body["margin"]["median_percent"] == "50.00"
+    assert body["margin"]["undefined_count"] == 0
+    assert body["bands"] == [
+        {
+            "label": "высокая",
+            "count": 2,
+            "lower_percent": "40.00",
+            "upper_percent": None,
+        }
+    ]
+    assert body["outliers"] == []
+    assert body["analysis_ref"].startswith("pa-")
+    assert qs.calls[0].category == "Электроника"
+
+
+def test_analytics_prices_defaults_to_whole_catalog():
+    qs = _FakeProductQuery(slice_=())
+    uc = AnalyzePrices(products=qs, default_currency="RUB")
+    client = _client({deps.get_analyze_prices: uc})
+    resp = client.post("/api/v1/analytics/prices", json={})
+    assert resp.status_code == 200
+    assert resp.json()["count"] == 0
+    assert qs.calls[0] == PriceAnalysisSelector()
+
+
+def test_analytics_prices_rejects_mixed_currency_slice():
+    usd = replace(_view("PROD-2"), price=MoneyView(Decimal("10.00"), "USD"))
+    qs = _FakeProductQuery(slice_=(_view("PROD-1"), usd))
+    uc = AnalyzePrices(products=qs, default_currency="RUB")
+    client = _client({deps.get_analyze_prices: uc})
+    resp = client.post("/api/v1/analytics/prices", json={})
+    assert resp.status_code == 409
+    assert resp.json()["code"] == "mixed_currency_slice"
+
+
 @pytest.mark.parametrize(
     "provider",
-    [deps.get_product_query_service, deps.get_reference_query_service],
+    [
+        deps.get_product_query_service,
+        deps.get_reference_query_service,
+        deps.get_analyze_prices,
+    ],
 )
 def test_query_providers_are_unwired(provider):
     with pytest.raises(NotImplementedError):
