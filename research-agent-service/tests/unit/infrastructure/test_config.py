@@ -49,11 +49,13 @@ def test_get_settings_is_cached() -> None:
 
 
 def test_llm_settings_defaults() -> None:
-    """LLM-настройки: кастомный base_url, thinking выключен по умолчанию."""
+    """LLM по умолчанию — DeepInfra; нестандартные поля не отправляются."""
     llm = Settings().llm
 
-    assert llm.base_url == "http://localhost:8001/v1"
-    assert llm.enable_thinking is False
+    assert llm.base_url == "https://api.deepinfra.com/v1/openai"
+    assert llm.model == "deepseek-ai/DeepSeek-V4-Flash"
+    assert llm.enable_thinking is None
+    assert llm.service_tier == ""
 
 
 def test_llm_nested_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
