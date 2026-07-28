@@ -14,7 +14,11 @@ from typing import Any
 
 import httpx
 
-DEFAULT_TIMEOUT_S = 120.0
+# Запас на загруженный стенд: при полном прогоне через конвейер проходит
+# несколько десятков товаров, и на общей очереди отдельная проверка ждёт
+# заметно дольше, чем в одиночку. Ожидание опросное — на быстром стенде
+# запас ничего не стоит.
+DEFAULT_TIMEOUT_S = 300.0
 POLL_INTERVAL_S = 0.5
 
 
@@ -27,9 +31,16 @@ class Stand:
     agent_degraded: str
     qdrant: str
     rabbit_management: str
+    rabbit_user: str
+    rabbit_password: str
     embedding_ops: str
     doubles: str
     collection: str
+
+    @property
+    def rabbit_auth(self) -> tuple[str, str]:
+        """Доступ к management API брокера."""
+        return (self.rabbit_user, self.rabbit_password)
 
     @classmethod
     def from_env(cls) -> "Stand":
@@ -43,6 +54,12 @@ class Stand:
             qdrant=os.getenv("STAND_QDRANT_URL", "http://localhost:6333"),
             rabbit_management=os.getenv(
                 "STAND_RABBITMQ_MANAGEMENT_URL", "http://localhost:15672"
+            ),
+            # Умолчания совпадают с .env.example: свои значения из .env
+            # прокидываются в тесты этими же переменными.
+            rabbit_user=os.getenv("RABBITMQ_USER", "platform"),
+            rabbit_password=os.getenv(
+                "RABBITMQ_PASSWORD", "change-me-rabbitmq"
             ),
             embedding_ops=os.getenv(
                 "STAND_EMBEDDING_OPS_URL", "http://localhost:8010"

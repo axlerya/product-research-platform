@@ -19,16 +19,19 @@ name: product-research-platform
 # Здесь фиксируется остальное: размерность 1024, коллекция и алиас products,
 # имена векторов dense/sparse (заданы кодом), модели BGE-M3 и bge-reranker.
 
+# Секреты приходят из .env (см. .env.example) и в файл не попадают. Форма
+# ${VAR:?...} обязательна: без .env стенд обязан упасть с внятной ошибкой, а
+# не подняться на пароле по умолчанию.
 x-catalog-env: &catalog-env
-  CATALOG_DATABASE_URL: postgresql+asyncpg://catalog:catalog@postgres:5432/catalog
-  CATALOG_RABBITMQ_DSN: amqp://guest:guest@rabbitmq:5672/
+  CATALOG_DATABASE_URL: postgresql+asyncpg://catalog:${CATALOG_DB_PASSWORD}@postgres:5432/catalog
+  CATALOG_RABBITMQ_DSN: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/
   CATALOG_DEFAULT_CURRENCY: RUB
   CATALOG_OUTBOX_POLL_INTERVAL_S: "0.5"
   CATALOG_LOG_LEVEL: INFO
 
 x-indexing-env: &indexing-env
-  INDEXING_RABBITMQ_DSN: amqp://guest:guest@rabbitmq:5672/
-  INDEXING_DATABASE_URL: postgresql+asyncpg://indexing:indexing@postgres:5432/indexing
+  INDEXING_RABBITMQ_DSN: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/
+  INDEXING_DATABASE_URL: postgresql+asyncpg://indexing:${INDEXING_DB_PASSWORD}@postgres:5432/indexing
   INDEXING_QDRANT_URL: http://qdrant:6333
   INDEXING_COLLECTION_ALIAS: products
   INDEXING_CATALOG_BASE_URL: http://catalog-api:8000
@@ -41,7 +44,7 @@ x-indexing-env: &indexing-env
   INDEXING_LOG_LEVEL: INFO
 
 x-embedding-env: &embedding-env
-  EMBEDDING_RABBITMQ_DSN: amqp://guest:guest@rabbitmq:5672/
+  EMBEDDING_RABBITMQ_DSN: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/
   EMBEDDING_GRPC_HOST: 0.0.0.0
   EMBEDDING_GRPC_PORT: "50051"
   EMBEDDING_OPS_HOST: 0.0.0.0
@@ -56,20 +59,20 @@ x-embedding-env: &embedding-env
   RERANKER_MODEL: BAAI/bge-reranker-v2-m3
 
 x-agent-env: &agent-env
-  RESEARCH_AGENT_DATABASE_URL: postgresql+asyncpg://research_agent:research_agent@postgres:5432/research_agent
+  RESEARCH_AGENT_DATABASE_URL: postgresql+asyncpg://research_agent:${RESEARCH_AGENT_DB_PASSWORD}@postgres:5432/research_agent
   RESEARCH_AGENT_REDIS_URL: redis://redis:6379/0
-  RESEARCH_AGENT_RABBITMQ_DSN: amqp://guest:guest@rabbitmq:5672/
+  RESEARCH_AGENT_RABBITMQ_DSN: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/
   RESEARCH_AGENT_EMBEDDING_GRPC_TARGET: embedding:50051
   RESEARCH_AGENT_RERANKER_GRPC_TARGET: embedding:50051
   RESEARCH_AGENT_QDRANT_URL: http://qdrant:6333
   RESEARCH_AGENT_QDRANT_COLLECTION: products
   RESEARCH_AGENT_CATALOG_BASE_URL: http://catalog-api:8000
   RESEARCH_AGENT_WEB_SEARCH_PROVIDER: tavily
-  RESEARCH_AGENT_WEB_SEARCH_API_KEY: stand-key
+  RESEARCH_AGENT_WEB_SEARCH_API_KEY: ${WEB_SEARCH_API_KEY}
   RESEARCH_AGENT_WEB_SEARCH_BASE_URL: http://test-doubles:8000
   RESEARCH_AGENT_LLM__BASE_URL: http://test-doubles:8000/v1
   RESEARCH_AGENT_LLM__MODEL: deterministic-test-llm
-  RESEARCH_AGENT_LLM__API_KEY: sk-stand
+  RESEARCH_AGENT_LLM__API_KEY: ${LLM_API_KEY}
   RESEARCH_AGENT_RELAY_INTERVAL_S: "0.5"
   RESEARCH_AGENT_LOG_LEVEL: INFO
 
@@ -100,19 +103,24 @@ x-http-health: &http-health
 
 services:
   # --- Инфраструктура -------------------------------------------------------
+  # Роли и базы сервисов создаёт init-скрипт при первой инициализации тома.
+  # Смена пароля на уже созданном томе требует либо ALTER ROLE, либо удаления
+  # тома: скрипты initdb.d выполняются ровно один раз.
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: catalog
-      POSTGRES_PASSWORD: catalog
-      POSTGRES_DB: catalog
+      POSTGRES_USER: ${POSTGRES_SUPERUSER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      CATALOG_DB_PASSWORD: ${CATALOG_DB_PASSWORD}
+      INDEXING_DB_PASSWORD: ${INDEXING_DB_PASSWORD}
+      RESEARCH_AGENT_DB_PASSWORD: ${RESEARCH_AGENT_DB_PASSWORD}
     ports:
       - "15432:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
-      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/10-databases.sql:ro
+      - ./docker/postgres/init-databases.sh:/docker-entrypoint-initdb.d/10-databases.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U catalog -d catalog"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_SUPERUSER}"]
       interval: 5s
       timeout: 5s
       retries: 30
@@ -121,6 +129,9 @@ services:
   # quorum-очередью.
   rabbitmq:
     image: rabbitmq:3.13-management
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
     ports:
       - "5672:5672"
       - "15672:15672"
