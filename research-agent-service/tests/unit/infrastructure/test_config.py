@@ -13,6 +13,27 @@ def test_defaults() -> None:
     assert settings.otlp_endpoint == ""
 
 
+def test_catalog_base_url_points_at_service_http_port() -> None:
+    """Каталог слушает 8000 — умолчание обязано вести туда же."""
+    assert Settings().catalog_base_url == "http://localhost:8000"
+
+
+def test_web_search_base_url_defaults_to_public_provider() -> None:
+    """Пустой base_url = публичный эндпоинт провайдера (прежнее поведение)."""
+    assert Settings().web_search_base_url == ""
+
+
+def test_web_search_base_url_env_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Адрес web-поиска подменяется окружением (локальный провайдер)."""
+    monkeypatch.setenv(
+        "RESEARCH_AGENT_WEB_SEARCH_BASE_URL", "http://doubles:8000"
+    )
+
+    assert Settings().web_search_base_url == "http://doubles:8000"
+
+
 def test_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     """Переменная окружения с префиксом переопределяет значение."""
     monkeypatch.setenv("RESEARCH_AGENT_LOG_LEVEL", "DEBUG")

@@ -5,20 +5,34 @@ import httpx
 from research_agent_service.application.dto.web import WebResult
 
 _ENDPOINT = "https://api.tavily.com/search"
+_PATH = "/search"
 
 
 class TavilyWebSearch:
-    """Web-поиск через Tavily. На ошибке возвращает пусто (деградация)."""
+    """Web-поиск через Tavily. На ошибке возвращает пусто (деградация).
 
-    def __init__(self, *, client: httpx.AsyncClient, api_key: str) -> None:
+    ``base_url`` подменяет публичный эндпоинт (свой шлюз или совместимый
+    провайдер в изолированном контуре); пустое значение — публичный API.
+    """
+
+    def __init__(
+        self,
+        *,
+        client: httpx.AsyncClient,
+        api_key: str,
+        base_url: str = "",
+    ) -> None:
         self._client = client
         self._api_key = api_key
+        self._endpoint = (
+            f"{base_url.rstrip('/')}{_PATH}" if base_url else _ENDPOINT
+        )
 
     async def search(self, query: str, *, k: int) -> tuple[WebResult, ...]:
         """Возвращает до k результатов (или пусто при ошибке)."""
         try:
             response = await self._client.post(
-                _ENDPOINT,
+                self._endpoint,
                 json={
                     "api_key": self._api_key,
                     "query": query,

@@ -48,11 +48,13 @@ class Settings(BaseSettings):
     reranker_grpc_target: str = "localhost:50051"
     qdrant_url: str = "http://localhost:6333"
     qdrant_collection: str = "products"
-    catalog_base_url: str = "http://localhost:8080"
+    catalog_base_url: str = "http://localhost:8000"
 
     # Провайдер web-поиска: "tavily" | "serper".
     web_search_provider: str = "tavily"
     web_search_api_key: str = ""
+    # Пусто = публичный эндпоинт провайдера; иначе — свой адрес того же API.
+    web_search_base_url: str = ""
 
     # Relay outbox: период дренажа и размер партии.
     relay_interval_s: float = 1.0

@@ -91,11 +91,15 @@ def _build_web_provider(
 ) -> WebSearchService:
     if settings.web_search_provider == "serper":
         provider = SerperWebSearch(
-            client=client, api_key=settings.web_search_api_key
+            client=client,
+            api_key=settings.web_search_api_key,
+            base_url=settings.web_search_base_url,
         )
     else:
         provider = TavilyWebSearch(
-            client=client, api_key=settings.web_search_api_key
+            client=client,
+            api_key=settings.web_search_api_key,
+            base_url=settings.web_search_base_url,
         )
     return WebSearchService(provider=provider, sanitizer=HtmlContentSanitizer())
 

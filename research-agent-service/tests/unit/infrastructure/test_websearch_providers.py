@@ -90,3 +90,65 @@ async def test_serper_returns_empty_on_error() -> None:
     provider = SerperWebSearch(client=_transport(handler), api_key="k")
 
     assert await provider.search("q", k=3) == ()
+
+
+async def test_tavily_calls_public_endpoint_by_default() -> None:
+    """Без base_url провайдер ходит в публичный API Tavily."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200, json={"results": []})
+
+    provider = TavilyWebSearch(client=_transport(handler), api_key="k")
+    await provider.search("q", k=1)
+
+    assert seen == ["https://api.tavily.com/search"]
+
+
+async def test_tavily_honours_configured_base_url() -> None:
+    """Заданный base_url перенаправляет запрос на свой эндпоинт."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200, json={"results": []})
+
+    provider = TavilyWebSearch(
+        client=_transport(handler),
+        api_key="k",
+        base_url="http://doubles:8000/",
+    )
+    await provider.search("q", k=1)
+
+    assert seen == ["http://doubles:8000/search"]
+
+
+async def test_serper_calls_public_endpoint_by_default() -> None:
+    """Без base_url провайдер ходит в публичный API Serper."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200, json={"organic": []})
+
+    provider = SerperWebSearch(client=_transport(handler), api_key="k")
+    await provider.search("q", k=1)
+
+    assert seen == ["https://google.serper.dev/search"]
+
+
+async def test_serper_honours_configured_base_url() -> None:
+    """Заданный base_url перенаправляет запрос на свой эндпоинт."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200, json={"organic": []})
+
+    provider = SerperWebSearch(
+        client=_transport(handler), api_key="k", base_url="http://doubles:8000"
+    )
+    await provider.search("q", k=1)
+
+    assert seen == ["http://doubles:8000/search"]
