@@ -70,8 +70,10 @@ x-agent-env: &agent-env
   RESEARCH_AGENT_WEB_SEARCH_PROVIDER: tavily
   RESEARCH_AGENT_WEB_SEARCH_API_KEY: ${WEB_SEARCH_API_KEY}
   RESEARCH_AGENT_WEB_SEARCH_BASE_URL: http://test-doubles:8000
-  RESEARCH_AGENT_LLM__BASE_URL: http://test-doubles:8000/v1
-  RESEARCH_AGENT_LLM__MODEL: deterministic-test-llm
+  # Провайдер задаётся окружением: по умолчанию детерминированный дубль,
+  # боевой вариант (DeepInfra) — в .env.example рядом.
+  RESEARCH_AGENT_LLM__BASE_URL: ${LLM_BASE_URL}
+  RESEARCH_AGENT_LLM__MODEL: ${LLM_MODEL}
   RESEARCH_AGENT_LLM__API_KEY: ${LLM_API_KEY}
   RESEARCH_AGENT_RELAY_INTERVAL_S: "0.5"
   RESEARCH_AGENT_LOG_LEVEL: INFO

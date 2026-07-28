@@ -10,18 +10,25 @@ class LlmSettings(BaseModel):
     """LLM через OpenAI-совместимый эндпоинт с кастомным base_url.
 
     Переменные окружения — с префиксом RESEARCH_AGENT_LLM__ (например
-    RESEARCH_AGENT_LLM__BASE_URL, RESEARCH_AGENT_LLM__MODEL).
+    RESEARCH_AGENT_LLM__BASE_URL, RESEARCH_AGENT_LLM__MODEL). Провайдер —
+    любой OpenAI-совместимый: self-hosted, DeepInfra и прочие.
+
+    Attributes:
+        service_tier: Расширение OpenAI; пусто — поле не отправляется.
+        enable_thinking: Флаг vLLM-совместимых; ``None`` — не отправляется.
     """
 
-    model: str = "qwen3"
-    base_url: str = "http://localhost:8001/v1"
-    api_key: str = "sk-local"
+    model: str = "deepseek-ai/DeepSeek-V4-Flash"
+    base_url: str = "https://api.deepinfra.com/v1/openai"
+    # Заведомая заглушка: клиент OpenAI не собирается с пустым ключом, а
+    # настоящий приходит из RESEARCH_AGENT_LLM__API_KEY.
+    api_key: str = "unset"
     temperature: float = 0.0
     max_tokens: int = 4096
     timeout: float = 60.0
     max_retries: int = 3
-    service_tier: str = "auto"
-    enable_thinking: bool = False
+    service_tier: str = ""
+    enable_thinking: bool | None = None
 
 
 class Settings(BaseSettings):
