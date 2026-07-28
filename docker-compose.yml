@@ -170,6 +170,10 @@ services:
         condition: service_healthy
     healthcheck: *http-health
 
+  # Relay стартует после консюмера событий: очередь и её привязка объявляются
+  # консюмером, а publish в topic-exchange без подходящей очереди брокер
+  # возвращает отправителю. Publisher такой возврат теперь замечает и повторяет
+  # с backoff, но на первом запуске ждать пришлось бы минутами.
   catalog-relay:
     <<: *catalog-build
     command:
@@ -179,6 +183,8 @@ services:
     environment: *catalog-env
     depends_on:
       catalog-api:
+        condition: service_healthy
+      indexing-consumer:
         condition: service_healthy
 
   catalog-seed:
@@ -259,8 +265,12 @@ services:
     environment: *indexing-env
     ports:
       - "8021:8000"
+    # См. комментарий у catalog-relay: очередь команд объявляет
+    # embedding-service, до его готовности публиковать некуда.
     depends_on:
       indexing-consumer:
+        condition: service_healthy
+      embedding:
         condition: service_healthy
     healthcheck: *http-health
 

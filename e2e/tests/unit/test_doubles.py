@@ -150,6 +150,54 @@ def test_build_completion_plans_tools_on_first_turn():
     assert body["usage"]["total_tokens"] == 24
 
 
+def test_build_completion_resolves_tool_name_by_call_id():
+    """Сообщение роли tool в формате OpenAI несёт только tool_call_id.
+
+    Поля ``name`` там нет, и без сопоставления с планом модели ответ
+    выродился бы в «инструменты не вернули данных».
+    """
+    body = build_completion(
+        {
+            "model": "m",
+            "messages": [
+                {"role": "user", "content": "найди наушники"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": RAG_TOOL,
+                                "arguments": '{"query": "наушники"}',
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "content": json.dumps({"products": [{"sku": "PROD-5"}]}),
+                },
+            ],
+        }
+    )
+
+    assert "PROD-5" in body["choices"][0]["message"]["content"]
+
+
+def test_compose_answer_ignores_unknown_call_id():
+    """Наблюдение без опознанного инструмента не выдаёт мусор в ответ."""
+    message = {
+        "role": "tool",
+        "tool_call_id": "call_unknown",
+        "content": json.dumps({"products": [{"sku": "PROD-1"}]}),
+    }
+
+    assert compose_answer([message], {}) == "Инструменты не вернули данных."
+
+
 def test_build_completion_answers_after_tool_messages():
     """После сообщений роли tool модель отвечает текстом."""
     body = build_completion(

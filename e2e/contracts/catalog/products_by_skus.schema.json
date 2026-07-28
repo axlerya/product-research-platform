@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "POST /api/v1/products/by-skus — кросс-сервисный контракт",
+  "description": "Что research-agent-service реально читает из ответа каталога (HttpCatalogClient._product). Схема tolerant: дополнительные поля допустимы, обязательные — те, без которых адаптер падает.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["products", "missing_skus"],
+  "properties": {
+    "missing_skus": { "type": "array", "items": { "type": "string" } },
+    "products": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "sku",
+          "name",
+          "category",
+          "brand",
+          "supplier",
+          "price",
+          "cost",
+          "stock",
+          "is_in_stock",
+          "margin",
+          "sales_per_month",
+          "avg_rating",
+          "review_count"
+        ],
+        "properties": {
+          "sku": { "type": "string", "minLength": 1 },
+          "name": { "type": "string" },
+          "category": { "type": "string" },
+          "brand": { "type": "string" },
+          "supplier": { "type": "string" },
+          "price": { "$ref": "#/$defs/money" },
+          "cost": { "$ref": "#/$defs/money" },
+          "stock": { "type": "integer" },
+          "is_in_stock": { "type": "boolean" },
+          "sales_per_month": { "type": "integer" },
+          "avg_rating": { "$ref": "#/$defs/decimalString" },
+          "review_count": { "type": "integer" },
+          "margin": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["percent"],
+            "properties": {
+              "percent": {
+                "oneOf": [
+                  { "$ref": "#/$defs/decimalString" },
+                  { "type": "null" }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "decimalString": { "type": "string", "pattern": "^-?[0-9]+\\.[0-9]{2}$" },
+    "money": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["amount", "currency"],
+      "properties": {
+        "amount": { "$ref": "#/$defs/decimalString" },
+        "currency": { "type": "string", "minLength": 3, "maxLength": 3 }
+      }
+    }
+  }
+}

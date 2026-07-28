@@ -9,7 +9,7 @@
 import grpc
 import httpx
 from qdrant_client import AsyncQdrantClient
-from redis.asyncio import Redis, from_url
+from redis.asyncio import Redis
 from sqlalchemy import text
 
 from research_agent_service.application.services.price_analysis import (
@@ -67,6 +67,7 @@ from research_agent_service.infrastructure.qdrant.vector_search import (
     QdrantVectorSearch,
 )
 from research_agent_service.infrastructure.redis.cache import RedisCache
+from research_agent_service.infrastructure.redis.client import build_redis
 from research_agent_service.infrastructure.redis.rate_limiter import (
     RedisTokenBucket,
 )
@@ -114,7 +115,7 @@ class Container:
         self._reranker_channel = grpc.aio.insecure_channel(
             settings.reranker_grpc_target
         )
-        self._redis: Redis = from_url(settings.redis_url)
+        self._redis: Redis = build_redis(settings.redis_url)
         self._qdrant = AsyncQdrantClient(url=settings.qdrant_url)
         self._catalog_http = httpx.AsyncClient(
             base_url=settings.catalog_base_url
@@ -127,10 +128,12 @@ class Container:
         embedding = GrpcEmbeddingClient(
             stub=embedding_pb2_grpc.EmbeddingServiceStub(
                 self._embedding_channel
-            )
+            ),
+            deadline_s=settings.embedding_deadline_s,
         )
         reranker = GrpcRerankerClient(
-            stub=reranker_pb2_grpc.RerankerServiceStub(self._reranker_channel)
+            stub=reranker_pb2_grpc.RerankerServiceStub(self._reranker_channel),
+            deadline_s=settings.reranker_deadline_s,
         )
         catalog = HttpCatalogClient(client=self._catalog_http)
         rag = ProductCatalogRagService(

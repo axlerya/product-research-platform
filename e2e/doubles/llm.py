@@ -113,8 +113,31 @@ def _web_summary(observation: Mapping[str, Any]) -> str | None:
     return f"Источники: {urls}."
 
 
-def compose_answer(tool_messages: Sequence[Mapping[str, Any]]) -> str:
+def tool_names_by_call_id(
+    messages: Sequence[Mapping[str, Any]],
+) -> dict[str, str]:
+    """Сопоставляет ``tool_call_id`` имени инструмента из плана модели.
+
+    В формате OpenAI сообщение роли ``tool`` несёт только ``tool_call_id``:
+    поля ``name`` там нет. Имя инструмента приходится брать из ассистентского
+    сообщения, которое этот вызов и заказало.
+    """
+    names: dict[str, str] = {}
+    for message in messages:
+        for call in message.get("tool_calls") or ():
+            call_id = call.get("id")
+            name = (call.get("function") or {}).get("name")
+            if call_id and name:
+                names[call_id] = name
+    return names
+
+
+def compose_answer(
+    tool_messages: Sequence[Mapping[str, Any]],
+    names_by_call_id: Mapping[str, str] | None = None,
+) -> str:
     """Собирает ответ строго из наблюдений инструментов."""
+    names = names_by_call_id or {}
     parts: list[str] = []
     for message in tool_messages:
         try:
@@ -123,7 +146,10 @@ def compose_answer(tool_messages: Sequence[Mapping[str, Any]]) -> str:
             continue
         if not isinstance(observation, dict):
             continue
-        summary = _summary_for(message.get("name"), observation)
+        name = message.get("name") or names.get(
+            str(message.get("tool_call_id"))
+        )
+        summary = _summary_for(name, observation)
         if summary is not None:
             parts.append(summary)
     return " ".join(parts) if parts else "Инструменты не вернули данных."
@@ -170,7 +196,9 @@ def build_completion(request: Mapping[str, Any]) -> dict[str, Any]:
             model,
             message={
                 "role": "assistant",
-                "content": compose_answer(tool_messages),
+                "content": compose_answer(
+                    tool_messages, tool_names_by_call_id(messages)
+                ),
             },
             finish_reason="stop",
         )

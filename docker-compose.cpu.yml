@@ -16,3 +16,16 @@ services:
     # !reset — единственный способ убрать секцию из базового файла: обычное
     # слияние списки не затирает, и резервирование GPU осталось бы в силе.
     deploy: !reset null
+
+  # Умолчания дедлайнов рассчитаны на GPU. Замер на этом стенде: реранкинг
+  # 60 кандидатов на CPU — около 4 с при дедлайне 5 с, то есть на грани;
+  # под нагрузкой вызов срывается и каждый запрос уходит в деградацию.
+  agent-api:
+    environment:
+      RESEARCH_AGENT_EMBEDDING_DEADLINE_S: "10"
+      RESEARCH_AGENT_RERANKER_DEADLINE_S: "30"
+
+  agent-api-degraded:
+    environment:
+      RESEARCH_AGENT_EMBEDDING_DEADLINE_S: "10"
+      RESEARCH_AGENT_RERANKER_DEADLINE_S: "30"
