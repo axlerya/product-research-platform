@@ -1,0 +1,338 @@
+# Единый production-like стенд платформы: один RabbitMQ, один Qdrant, один
+# Postgres с отдельной базой на сервис, один Redis.
+#
+#   docker compose up -d --build                  # GPU (по умолчанию)
+#   docker compose -f docker-compose.yml \
+#                  -f docker-compose.cpu.yml up -d --build      # без GPU
+#   docker compose --profile seed run --rm catalog-seed         # засев CSV
+#
+# Детерминированными заменены только LLM и внешний web-поиск (контейнер
+# test-doubles). Эмбеддинги, реранкинг, брокер и векторное хранилище —
+# боевые: конвейер проверяется целиком.
+name: product-research-platform
+
+# --- Согласованные кросс-сервисные значения ---------------------------------
+# exchange/routing keys заданы кодом сервисов и совпадают:
+#   catalog.events (topic) / catalog.product.*
+#   embedding.jobs (topic) / embedding.documents.requested.v1
+#   embedding.events (topic) / embedding.documents.generated.v1
+# Здесь фиксируется остальное: размерность 1024, коллекция и алиас products,
+# имена векторов dense/sparse (заданы кодом), модели BGE-M3 и bge-reranker.
+
+x-catalog-env: &catalog-env
+  CATALOG_DATABASE_URL: postgresql+asyncpg://catalog:catalog@postgres:5432/catalog
+  CATALOG_RABBITMQ_DSN: amqp://guest:guest@rabbitmq:5672/
+  CATALOG_DEFAULT_CURRENCY: RUB
+  CATALOG_OUTBOX_POLL_INTERVAL_S: "0.5"
+  CATALOG_LOG_LEVEL: INFO
+
+x-indexing-env: &indexing-env
+  INDEXING_RABBITMQ_DSN: amqp://guest:guest@rabbitmq:5672/
+  INDEXING_DATABASE_URL: postgresql+asyncpg://indexing:indexing@postgres:5432/indexing
+  INDEXING_QDRANT_URL: http://qdrant:6333
+  INDEXING_COLLECTION_ALIAS: products
+  INDEXING_CATALOG_BASE_URL: http://catalog-api:8000
+  INDEXING_DEFAULT_CURRENCY: RUB
+  # Обязана совпадать с EMBEDDING_DIM: иначе результат отклоняется как
+  # невалидный и коллекция создаётся под другую размерность.
+  INDEXING_EMBEDDING_DIM: "1024"
+  INDEXING_MAX_TEXTS: "32"
+  INDEXING_OUTBOX_POLL_INTERVAL_S: "0.5"
+  INDEXING_LOG_LEVEL: INFO
+
+x-embedding-env: &embedding-env
+  EMBEDDING_RABBITMQ_DSN: amqp://guest:guest@rabbitmq:5672/
+  EMBEDDING_GRPC_HOST: 0.0.0.0
+  EMBEDDING_GRPC_PORT: "50051"
+  EMBEDDING_OPS_HOST: 0.0.0.0
+  EMBEDDING_OPS_HTTP_PORT: "8000"
+  EMBEDDING_PROVIDER_MODE: bge_m3
+  EMBEDDING_MODEL: BAAI/bge-m3
+  EMBEDDING_DIM: "1024"
+  # Реранкинг живёт в том же процессе на том же gRPC-порту, но отдельной
+  # моделью и отдельным жизненным циклом (его сбой не роняет эмбеддинги).
+  RERANKER_ENABLED: "true"
+  RERANKER_PROVIDER_MODE: bge_reranker
+  RERANKER_MODEL: BAAI/bge-reranker-v2-m3
+
+x-agent-env: &agent-env
+  RESEARCH_AGENT_DATABASE_URL: postgresql+asyncpg://research_agent:research_agent@postgres:5432/research_agent
+  RESEARCH_AGENT_REDIS_URL: redis://redis:6379/0
+  RESEARCH_AGENT_RABBITMQ_DSN: amqp://guest:guest@rabbitmq:5672/
+  RESEARCH_AGENT_EMBEDDING_GRPC_TARGET: embedding:50051
+  RESEARCH_AGENT_RERANKER_GRPC_TARGET: embedding:50051
+  RESEARCH_AGENT_QDRANT_URL: http://qdrant:6333
+  RESEARCH_AGENT_QDRANT_COLLECTION: products
+  RESEARCH_AGENT_CATALOG_BASE_URL: http://catalog-api:8000
+  RESEARCH_AGENT_WEB_SEARCH_PROVIDER: tavily
+  RESEARCH_AGENT_WEB_SEARCH_API_KEY: stand-key
+  RESEARCH_AGENT_WEB_SEARCH_BASE_URL: http://test-doubles:8000
+  RESEARCH_AGENT_LLM__BASE_URL: http://test-doubles:8000/v1
+  RESEARCH_AGENT_LLM__MODEL: deterministic-test-llm
+  RESEARCH_AGENT_LLM__API_KEY: sk-stand
+  RESEARCH_AGENT_RELAY_INTERVAL_S: "0.5"
+  RESEARCH_AGENT_LOG_LEVEL: INFO
+
+x-catalog-build: &catalog-build
+  build:
+    context: ./catalog-service
+    dockerfile: docker/Dockerfile
+
+x-indexing-build: &indexing-build
+  build:
+    context: ./indexing-service
+    dockerfile: docker/Dockerfile
+
+x-agent-build: &agent-build
+  build:
+    context: ./research-agent-service
+    dockerfile: docker/Dockerfile
+
+x-http-health: &http-health
+  test:
+    - CMD-SHELL
+    - >-
+      python -c "import urllib.request;
+      urllib.request.urlopen('http://localhost:8000/health')"
+  interval: 5s
+  timeout: 5s
+  retries: 30
+
+services:
+  # --- Инфраструктура -------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: catalog
+      POSTGRES_PASSWORD: catalog
+      POSTGRES_DB: catalog
+    ports:
+      - "15432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/10-databases.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U catalog -d catalog"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # 3.13 обязателен: embedding-service объявляет свою основную очередь
+  # quorum-очередью.
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  qdrant:
+    image: qdrant/qdrant:v1.13.5
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "16379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # Детерминированные внешние провайдеры: OpenAI-совместимый LLM и web-поиск.
+  test-doubles:
+    build:
+      context: ./e2e
+      dockerfile: Dockerfile
+    ports:
+      - "8090:8000"
+    healthcheck: *http-health
+
+  # --- catalog-service ------------------------------------------------------
+  catalog-api:
+    <<: *catalog-build
+    environment: *catalog-env
+    ports:
+      - "8001:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck: *http-health
+
+  catalog-relay:
+    <<: *catalog-build
+    command:
+      - faststream
+      - run
+      - catalog_service.presentation.messaging.relay_app:app
+    environment: *catalog-env
+    depends_on:
+      catalog-api:
+        condition: service_healthy
+
+  catalog-seed:
+    <<: *catalog-build
+    profiles: ["seed"]
+    command:
+      - python
+      - -m
+      - catalog_service
+      - seed
+      - --file
+      - products_catalog_ru.csv
+    environment: *catalog-env
+    volumes:
+      - ./products_catalog_ru.csv:/app/products_catalog_ru.csv:ro
+    depends_on:
+      catalog-api:
+        condition: service_healthy
+
+  # --- embedding-service ----------------------------------------------------
+  # Один процесс: gRPC (EmbedQuery + Rerank) и консюмер команд документов.
+  embedding:
+    build:
+      context: ./embedding-service
+      dockerfile: docker/Dockerfile.gpu
+    environment: *embedding-env
+    volumes:
+      - hf_cache:/app/.cache/huggingface
+    ports:
+      - "50051:50051"
+      - "8010:8000"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    # Первый запуск скачивает две модели (~4.6 ГБ) — окно прогрева большое.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 900s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # --- indexing-service -----------------------------------------------------
+  # Консюмер каталога: событие → карточка в Qdrant + job и команда в outbox.
+  # Единственная роль, накатывающая миграции и провижинящая коллекцию.
+  indexing-consumer:
+    <<: *indexing-build
+    environment:
+      <<: *indexing-env
+      RUN_MIGRATIONS: "1"
+    ports:
+      - "8020:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    healthcheck: *http-health
+
+  indexing-relay:
+    <<: *indexing-build
+    command:
+      - uvicorn
+      - indexing_service.presentation.messaging.relay_app:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    environment: *indexing-env
+    ports:
+      - "8021:8000"
+    depends_on:
+      indexing-consumer:
+        condition: service_healthy
+    healthcheck: *http-health
+
+  indexing-result-consumer:
+    <<: *indexing-build
+    command:
+      - uvicorn
+      - indexing_service.presentation.messaging.result_consumer_app:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    environment: *indexing-env
+    ports:
+      - "8022:8000"
+    depends_on:
+      indexing-consumer:
+        condition: service_healthy
+    healthcheck: *http-health
+
+  # --- research-agent-service ----------------------------------------------
+  agent-api:
+    <<: *agent-build
+    environment:
+      <<: *agent-env
+      RUN_MIGRATIONS: "1"
+    ports:
+      - "8080:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      catalog-api:
+        condition: service_healthy
+      test-doubles:
+        condition: service_healthy
+      embedding:
+        condition: service_healthy
+    healthcheck: *http-health
+
+  agent-relay:
+    <<: *agent-build
+    command:
+      - faststream
+      - run
+      - research_agent_service.presentation.messaging.relay_app:app
+    environment: *agent-env
+    depends_on:
+      agent-api:
+        condition: service_healthy
+
+  # Тот же сервис с недоступным reranker: адрес есть, порт закрыт — gRPC
+  # отвечает UNAVAILABLE. Отдельный инстанс вместо остановки контейнера:
+  # общий стенд не мутируется и набор тестов не зависит от порядка.
+  agent-api-degraded:
+    <<: *agent-build
+    environment:
+      <<: *agent-env
+      RESEARCH_AGENT_RERANKER_GRPC_TARGET: test-doubles:59999
+    ports:
+      - "8081:8000"
+    depends_on:
+      agent-api:
+        condition: service_healthy
+    healthcheck: *http-health
+
+volumes:
+  pg_data:
+  qdrant_data:
+  hf_cache:

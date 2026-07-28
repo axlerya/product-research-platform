@@ -1,0 +1,45 @@
+[project]
+name = "platform-e2e"
+version = "0.1.0"
+description = "Стенд платформы: детерминированные тестовые провайдеры и сквозные тесты"
+requires-python = ">=3.12"
+# Рантайм контейнера тестовых провайдеров — только ASGI-обвязка.
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
+    "qdrant-client>=1.12",
+    "jsonschema>=4.22",
+    "ruff>=0.13",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["doubles"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 80
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+addopts = "--strict-markers"
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "contract: кросс-сервисные контракты поднятого стенда",
+    "e2e: сквозные сценарии поднятого стенда",
+]
