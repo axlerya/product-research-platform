@@ -1,6 +1,7 @@
 """Тесты Redis-адаптеров на фейковом клиенте."""
 
 from research_agent_service.infrastructure.redis.cache import RedisCache
+from research_agent_service.infrastructure.redis.client import build_redis
 from research_agent_service.infrastructure.redis.rate_limiter import (
     RedisTokenBucket,
 )
@@ -50,6 +51,18 @@ async def test_cache_missing_returns_none() -> None:
     cache = RedisCache(client=_FakeRedis())  # type: ignore[arg-type]
 
     assert await cache.get("absent") is None
+
+
+def test_client_decodes_responses() -> None:
+    """Клиент обязан декодировать ответы: порт кеша объявлен в str.
+
+    Без этого Redis отдаёт bytes, и реплей по idempotency-ключу падает на
+    разборе идентификатора прогона — то есть повтор запроса вместо прежнего
+    ответа возвращает 500.
+    """
+    client = build_redis("redis://localhost:6379/0")
+
+    assert client.connection_pool.connection_kwargs["decode_responses"] is True
 
 
 async def test_rate_limiter_allows_within_limit() -> None:
