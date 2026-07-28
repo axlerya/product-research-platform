@@ -12,6 +12,7 @@ content / repair), пишут в Qdrant карточку товара **без**
 Qdrant, мимо embedding-service.
 """
 
+from indexing_service.application.aggregate_lock import AggregateLock
 from indexing_service.application.document_builder import to_product_document
 from indexing_service.application.dto.embedding_job import EmbeddingJobRequest
 from indexing_service.application.dto.events import (
@@ -71,15 +72,28 @@ class ProcessCatalogEvent:
         self._catalog = catalog
         self._clock = clock
         self._expected_model = expected_model
+        self._lock = AggregateLock()
 
     async def handle(self, event: CatalogEvent) -> IndexingAction:
         """Классифицирует и применяет событие; возвращает действие.
+
+        События одного товара обрабатываются строго по одному: чтение знака,
+        классификация и запись — единый read-modify-write, и вклинившееся
+        событие того же товара приводит к тому, что более старое применяется
+        последним и побеждает.
 
         Raises:
             EventValidationError: Событие нарушает доменные инварианты.
             TransientError: Временный сбой порта (Qdrant/Postgres/catalog).
         """
         product_id = ProductId(event.product_id)
+        async with self._lock.acquire(product_id.value):
+            return await self._handle_locked(event, product_id)
+
+    async def _handle_locked(
+        self, event: CatalogEvent, product_id: ProductId
+    ) -> IndexingAction:
+        """Тело обработки под замком товара."""
         watermark = await self._index.get_watermark(product_id)
         try:
             content_hash = self._content_hash_of(event)
