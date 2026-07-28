@@ -7,7 +7,10 @@ from faststream.rabbit import TestRabbitBroker
 
 from indexing_service.domain.services.change_classifier import IndexingAction
 from indexing_service.presentation.messaging.consumer_app import broker
-from indexing_service.presentation.messaging.topology import CATALOG_EXCHANGE
+from indexing_service.presentation.messaging.topology import (
+    CATALOG_EXCHANGE,
+    MAIN_QUEUE_NAME,
+)
 
 NOW = datetime(2026, 7, 19, 10, 15, 30, tzinfo=UTC)
 PID = UUID(int=1)
@@ -91,3 +94,21 @@ async def test_poison_event_parks_not_handled():
         )
     assert fake.events == []
     assert len(parker.parked) == 1
+
+
+def test_single_consumer_per_main_queue() -> None:
+    """На основной очереди ровно один подписчик.
+
+    Второй подписчик на той же очереди (он появлялся из-за отдельного
+    декоратора под requeue-exchange) означал параллельную обработку событий
+    одного товара: более старое применялось последним и затирало новое.
+    """
+    subscribed = [
+        sub
+        for sub in broker.subscribers
+        if getattr(sub, "queue", None) is not None
+        and sub.queue.name == MAIN_QUEUE_NAME
+    ]
+
+    assert len(subscribed) == 1
+

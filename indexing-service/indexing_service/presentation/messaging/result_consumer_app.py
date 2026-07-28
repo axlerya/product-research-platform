@@ -10,7 +10,7 @@ from typing import Any
 
 from faststream import AckPolicy, Context, ContextRepo
 from faststream.asgi import AsgiFastStream, make_ping_asgi
-from faststream.rabbit import RabbitBroker, RabbitMessage
+from faststream.rabbit import Channel, RabbitBroker, RabbitMessage
 from faststream.rabbit.prometheus import RabbitPrometheusMiddleware
 from prometheus_client import CollectorRegistry, make_asgi_app
 
@@ -39,6 +39,9 @@ broker = RabbitBroker(
     _settings.rabbitmq_dsn,
     graceful_timeout=30,
     middlewares=[RabbitPrometheusMiddleware(registry=_registry)],
+    # Настройка была объявлена, но никуда не доходила — QoS оставался
+    # умолчанием фреймворка.
+    default_channel=Channel(prefetch_count=_settings.prefetch_count),
 )
 app = AsgiFastStream(
     broker,
@@ -61,8 +64,9 @@ async def _park(message: RabbitMessage) -> None:
     )
 
 
+# Подписчик ровно один: второй декоратор давал второго консюмера на той же
+# очереди. Привязка к requeue-exchange объявляется декларативно ниже.
 @broker.subscriber(_MAIN, EMBEDDING_EVENTS, ack_policy=AckPolicy.MANUAL)
-@broker.subscriber(_MAIN, RESULT_REQUEUE_EXCHANGE, ack_policy=AckPolicy.MANUAL)
 async def on_embedding_result(
     envelope: EmbeddingEventEnvelope,
     message: RabbitMessage,
@@ -91,11 +95,15 @@ async def _startup(context: ContextRepo) -> None:
 @app.after_startup
 async def _declare_topology(context: ContextRepo) -> None:
     retry_ex = await broker.declare_exchange(RESULT_RETRY_EXCHANGE)
+    requeue_ex = await broker.declare_exchange(RESULT_REQUEUE_EXCHANGE)
     parking_ex = await broker.declare_exchange(RESULT_PARKING_EXCHANGE)
+    main_q = await broker.declare_queue(_MAIN)
     retry_q = await broker.declare_queue(
         result_retry_queue(_settings.retry_ttl_ms)
     )
     parking_q = await broker.declare_queue(result_parking_queue())
+    # Возврат из retry-лестницы приходит в ту же основную очередь.
+    await main_q.bind(requeue_ex, routing_key=ROUTING_KEY)
     await retry_q.bind(retry_ex, routing_key=ROUTING_KEY)
     await parking_q.bind(parking_ex, routing_key=ROUTING_KEY)
 

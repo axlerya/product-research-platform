@@ -8,6 +8,8 @@ gap-repair, дедуп ре-эмбеддинга, защиту от воскре
 здесь же проверяется, что job и команда действительно появляются.
 """
 
+import asyncio
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import UUID
@@ -280,6 +282,62 @@ async def test_commercial_payload_only_no_job():
     assert payload["in_stock"] is False
     assert "name" not in payload
     assert payload["aggregate_version"] == 6
+
+
+class _YieldingIndex(FakeVectorIndex):
+    """Индекс, уступающий управление между чтением знака и записью.
+
+    Воспроизводит то, что даёт реальный консюмер: обработчики разных событий
+    выполняются на одном цикле и могут вклиниться друг в друга.
+    """
+
+    async def get_watermark(self, product_id):
+        watermark = await super().get_watermark(product_id)
+        await asyncio.sleep(0)
+        return watermark
+
+
+async def test_concurrent_events_of_one_product_do_not_overwrite():
+    """Параллельные события одного товара не затирают более новое.
+
+    Guard по версии — это read-modify-write: читаем знак точки, решаем
+    действие, пишем. Вклинившееся событие того же товара приводит к тому, что
+    более старое применяется последним и побеждает. Расхождение с каталогом
+    остаётся навсегда: следующих событий по этому товару уже не будет, и
+    чинит только полная сверка.
+    """
+    index = _YieldingIndex()
+    index.preload(PID, _wm_payload(1))
+
+    use_case = _uc(index)
+    await asyncio.gather(
+        use_case.handle(_commercial(3, price="777.00", stock=0)),
+        use_case.handle(_commercial(2, price="777.00", stock=10)),
+    )
+
+    payload = index.payload_of(PID)
+    assert payload["aggregate_version"] == 3
+    assert payload["stock"] == 0
+    assert payload["in_stock"] is False
+
+
+async def test_concurrent_events_of_different_products_are_not_serialised():
+    """Замок берётся по товару: разные товары друг друга не ждут."""
+    index = _YieldingIndex()
+    other = ProductId(UUID(int=42))
+    index.preload(PID, _wm_payload(1))
+    index.preload(other, _wm_payload(1))
+
+    use_case = _uc(index)
+    await asyncio.gather(
+        use_case.handle(_commercial(2, price="700.00")),
+        use_case.handle(
+            replace(_commercial(2, price="800.00"), product_id=other.value)
+        ),
+    )
+
+    assert index.payload_of(PID)["price"] == 700.0
+    assert index.payload_of(other)["price"] == 800.0
 
 
 async def test_commercial_stale_skipped():
