@@ -26,12 +26,23 @@ PARKING_QUEUE_NAME = "indexing.catalog.products.dlq"
 
 
 def main_queue() -> RabbitQueue:
-    """Основная очередь: reject → retry-exchange (backoff-лестница)."""
+    """Основная очередь: reject → retry-exchange (backoff-лестница).
+
+    ``x-single-active-consumer`` — часть корректности, а не тюнинг. Обработка
+    события это read-modify-write водяного знака точки, и параллельный разбор
+    двух событий одного товара приводит к тому, что более старое применяется
+    последним и затирает новое. Внутри процесса это удерживает замок по
+    товару, а между репликами — брокер: сообщения получает только один
+    консюмер, остальные ждут и подхватывают при его падении.
+    """
     return RabbitQueue(
         MAIN_QUEUE_NAME,
         durable=True,
         routing_key=_ROUTING,
-        arguments={"x-dead-letter-exchange": RETRY_EXCHANGE.name},
+        arguments={
+            "x-dead-letter-exchange": RETRY_EXCHANGE.name,
+            "x-single-active-consumer": True,
+        },
     )
 
 

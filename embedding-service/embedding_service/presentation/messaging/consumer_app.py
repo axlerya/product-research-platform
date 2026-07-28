@@ -10,7 +10,7 @@ from collections.abc import Callable
 
 from faststream import AckPolicy
 from faststream.asgi import AsgiFastStream, make_ping_asgi
-from faststream.rabbit import RabbitBroker, RabbitMessage
+from faststream.rabbit import Channel, RabbitBroker, RabbitMessage
 from prometheus_client import make_asgi_app
 
 from embedding_service.application.dto import DocumentsGenerated
@@ -28,7 +28,10 @@ from embedding_service.presentation.messaging.topology import (
     PARKING_EXCHANGE,
     REQUESTED_RK,
     REQUEUE_EXCHANGE,
+    RETRY_EXCHANGE,
     main_queue,
+    parking_queue,
+    retry_queue,
 )
 
 
@@ -37,6 +40,8 @@ def build_broker(deps: Deps) -> RabbitBroker:
     return RabbitBroker(
         deps.settings.rabbitmq_dsn,
         graceful_timeout=deps.settings.graceful_timeout,
+        # QoS был объявлен в настройках, но никуда не доходил.
+        default_channel=Channel(prefetch_count=deps.settings.prefetch_count),
     )
 
 
@@ -80,8 +85,10 @@ def build_consumer(
 
     queue = main_queue()
 
+    # Подписчик ровно один: второй декоратор нужен был только ради привязки
+    # очереди к requeue-exchange, но попутно создавал второго консюмера на той
+    # же очереди. Привязка объявляется декларативно при старте.
     @broker.subscriber(queue, JOBS_EXCHANGE, ack_policy=AckPolicy.MANUAL)
-    @broker.subscriber(queue, REQUEUE_EXCHANGE, ack_policy=AckPolicy.MANUAL)
     async def on_requested(msg: RabbitMessage) -> None:
         payload = json.loads(msg.body)
         await dispatch(
@@ -101,4 +108,27 @@ def build_consumer(
     if reranker_ready is not None:
         routes.append(("/reranker/ready", readiness_asgi(reranker_ready)))
 
-    return AsgiFastStream(broker, asgi_routes=routes)
+    app = AsgiFastStream(broker, asgi_routes=routes)
+
+    @app.after_startup
+    async def _declare_topology() -> None:
+        """Объявляет лестницу main → retry(TTL) → requeue → parking.
+
+        Без неё основная очередь ссылается на несуществующий dead-letter
+        exchange, и брокер молча выбрасывает каждое отклонённое сообщение:
+        ни ретраев, ни DLQ — команда на эмбеддинг просто исчезает.
+        """
+        retry_ex = await broker.declare_exchange(RETRY_EXCHANGE)
+        requeue_ex = await broker.declare_exchange(REQUEUE_EXCHANGE)
+        parking_ex = await broker.declare_exchange(PARKING_EXCHANGE)
+        main_q = await broker.declare_queue(queue)
+        retry_q = await broker.declare_queue(
+            retry_queue(deps.settings.retry_ttl_ms)
+        )
+        parking_q = await broker.declare_queue(parking_queue())
+        # Возврат из retry-лестницы приходит в ту же основную очередь.
+        await main_q.bind(requeue_ex, routing_key=REQUESTED_RK)
+        await retry_q.bind(retry_ex, routing_key=REQUESTED_RK)
+        await parking_q.bind(parking_ex, routing_key=REQUESTED_RK)
+
+    return app

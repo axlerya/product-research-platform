@@ -27,12 +27,21 @@ RESULT_PARKING_QUEUE_NAME = "indexing.embeddings.generated.dlq"
 
 
 def result_main_queue() -> RabbitQueue:
-    """Основная очередь: reject → retry-exchange (backoff-лестница)."""
+    """Основная очередь: reject → retry-exchange (backoff-лестница).
+
+    ``x-single-active-consumer`` — по той же причине, что и у очереди
+    каталога: применение результата читает состояние точки и job'а, а затем
+    пишет. Параллельный разбор двух результатов одного товара между репликами
+    даёт то же затирание более нового более старым.
+    """
     return RabbitQueue(
         RESULT_MAIN_QUEUE_NAME,
         durable=True,
         routing_key=ROUTING_KEY,
-        arguments={"x-dead-letter-exchange": RESULT_RETRY_EXCHANGE.name},
+        arguments={
+            "x-dead-letter-exchange": RESULT_RETRY_EXCHANGE.name,
+            "x-single-active-consumer": True,
+        },
     )
 
 
