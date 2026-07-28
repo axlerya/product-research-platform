@@ -6,32 +6,18 @@ Publisher — отдельный процесс-relay (не HTTP-хендлер)
 
 from typing import Any, Protocol
 
-from faststream.rabbit import ExchangeType, RabbitBroker, RabbitExchange
-from pamqp.commands import Basic
+from faststream.rabbit import (
+    Channel,
+    ExchangeType,
+    RabbitBroker,
+    RabbitExchange,
+)
 
 from catalog_service.infrastructure.config import Settings
 
 CATALOG_EVENTS = RabbitExchange(
     "catalog.events", type=ExchangeType.TOPIC, durable=True
 )
-
-
-class UnroutableMessage(RuntimeError):
-    """Брокер вернул сообщение: подходящей очереди для ключа нет."""
-
-
-def ensure_routed(confirmation: Any, *, routing_key: str) -> None:
-    """Превращает возврат сообщения брокером в ошибку публикации.
-
-    ``publish`` с mandatory не бросает сам: он отдаёт подтверждение, внутри
-    которого лежит ``Basic.Return``. Без этой проверки relay пометил бы
-    невостребованное событие опубликованным — и оно исчезло бы бесследно
-    (например, если консюмер ещё не объявил свою очередь).
-    """
-    if isinstance(getattr(confirmation, "delivery", None), Basic.Return):
-        raise UnroutableMessage(
-            f"Брокер вернул сообщение: нет очереди для {routing_key!r}"
-        )
 
 
 class EventPublisher(Protocol):
@@ -50,8 +36,18 @@ class EventPublisher(Protocol):
 
 
 def build_broker(settings: Settings) -> RabbitBroker:
-    """Создаёт брокер RabbitMQ (подключение — при старте FastStream)."""
-    return RabbitBroker(settings.rabbitmq_dsn)
+    """Создаёт брокер RabbitMQ (подключение — при старте FastStream).
+
+    ``on_return_raises`` обязателен для relay: сам по себе publish возврат
+    сообщения брокером не считает ошибкой и отдаёт подтверждение с
+    ``Basic.Return`` внутри. Без этого outbox пометил бы невостребованное
+    событие опубликованным — например, когда консюмер ещё не объявил свою
+    очередь, — и оно исчезло бы бесследно.
+    """
+    return RabbitBroker(
+        settings.rabbitmq_dsn,
+        default_channel=Channel(on_return_raises=True),
+    )
 
 
 class RabbitEventPublisher:
@@ -68,11 +64,10 @@ class RabbitEventPublisher:
         message_id: str,
         headers: dict[str, str],
     ) -> None:
-        confirmation = await self._broker.publish(
+        await self._broker.publish(
             payload,
             exchange=CATALOG_EVENTS,
             routing_key=routing_key,
             message_id=message_id,
             headers=headers,
         )
-        ensure_routed(confirmation, routing_key=routing_key)
