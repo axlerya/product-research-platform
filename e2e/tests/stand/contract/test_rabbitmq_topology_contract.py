@@ -14,7 +14,6 @@ from tests.support.stand import Stand
 
 pytestmark = pytest.mark.contract
 
-_AUTH = ("guest", "guest")
 _VHOST = "%2F"
 
 _EXPECTED_EXCHANGES = {
@@ -44,7 +43,7 @@ _EXPECTED_BINDINGS = {
 
 
 def _get(stand: Stand, path: str) -> Any:
-    with httpx.Client(timeout=30.0, auth=_AUTH) as client:
+    with httpx.Client(timeout=30.0, auth=stand.rabbit_auth) as client:
         response = client.get(f"{stand.rabbit_management}/api/{path}")
         response.raise_for_status()
         return response.json()
