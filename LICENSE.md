@@ -1,3 +1,5 @@
+Required Notice: Copyright Александр Рябов (https://github.com/axlerya)
+
 # PolyForm Noncommercial License 1.0.0
 
 <https://polyformproject.org/licenses/noncommercial/1.0.0>
