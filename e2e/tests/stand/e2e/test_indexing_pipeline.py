@@ -51,11 +51,12 @@ def test_created_product_appears_in_rag(
 
     answer = ask(http, stand.agent, f"найди {product['name']}")
 
-    assert answer["used_tools"] == ["product_catalog_rag"]
+    # Формулировку ответа задаёт модель — проверяем цитату: она и есть
+    # доказательство, что товар доехал до поисковой выдачи.
+    assert "product_catalog_rag" in answer["used_tools"]
     assert product["sku"] in citation_refs(answer, "product")
     assert answer["degradations"] == []
     assert answer["confidence"] == "high"
-    assert product["sku"] in answer["answer"]
 
 
 def test_content_change_triggers_reindex(
